@@ -1,0 +1,12 @@
+{
+  "name": "dylan-skills",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cheerio": "1.0.0-rc.12",
+    "turndown": "^7.1.3"
+  }
+}
