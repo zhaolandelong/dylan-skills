@@ -1,0 +1,21 @@
+{
+  "name": "dylan-wechat-to-md",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "dylan-wechat-to-md": "./scripts/wechat_to_md.mjs"
+  },
+  "dependencies": {
+    "cheerio": "1.0.0-rc.12",
+    "turndown": "^7.1.3"
+  },
+  "files": [
+    "SKILL.md",
+    "config.json",
+    "scripts/"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
