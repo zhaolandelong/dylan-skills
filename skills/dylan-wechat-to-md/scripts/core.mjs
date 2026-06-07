@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import TurndownService from 'turndown';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 export function isProbablyWechatArticleUrl(input) {
   try {
@@ -150,9 +151,11 @@ export function buildFrontmatter({ title, sourceUrl, fetchedAt }) {
   const t = String(title || '').replace(/\n/g, ' ').trim();
   const u = String(sourceUrl || '').trim();
   const f = String(fetchedAt || '').trim();
+  const a = buildArticleId(u);
 
   return [
     '---',
+    `article_id: ${jsonString(a)}`,
     `title: ${jsonString(t)}`,
     `source_url: ${jsonString(u)}`,
     `fetched_at: ${jsonString(f)}`,
@@ -166,6 +169,12 @@ export function buildMarkdownDoc({ title, sourceUrl, fetchedAt, contentMarkdown 
     buildFrontmatter({ title, sourceUrl, fetchedAt }) +
     ensureTrailingNewline(String(contentMarkdown || ''))
   );
+}
+
+export function buildArticleId(sourceUrl) {
+  const u = String(sourceUrl || '').trim();
+  const hash = crypto.createHash('sha1').update(u).digest('hex').slice(0, 12);
+  return `wx-${hash}`;
 }
 
 export function expandTildePath(inputPath, homeDir) {

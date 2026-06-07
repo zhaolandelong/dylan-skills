@@ -1,4 +1,5 @@
 {
   "outDir": "./wechat-md",
-  "cookie": ""
+  "cookie": "",
+  "downloadImages": false
 }
