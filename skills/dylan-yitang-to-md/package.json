@@ -1,0 +1,24 @@
+{
+  "name": "dylan-yitang-to-md",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "dylan-yitang-to-md": "./scripts/yitang_to_md.mjs",
+    "dylan-yitang-login": "./scripts/yitang_login.mjs",
+    "dylan-yitang-images": "./scripts/yitang_images.mjs"
+  },
+  "dependencies": {
+    "cheerio": "1.0.0-rc.12",
+    "playwright-core": "^1.53.1",
+    "turndown": "^7.1.3"
+  },
+  "files": [
+    "SKILL.md",
+    "config.json",
+    "scripts/"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

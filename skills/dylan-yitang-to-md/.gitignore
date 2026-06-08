@@ -16,11 +16,5 @@ coverage/
 .env
 .env.*
 
-.vscode/
-.idea/
-
-test-docs/
-skills/dylan-yitang-to-md/storageState.json
-
-.trae/documents/
-.codegraph/
+storageState.json
+*.png
