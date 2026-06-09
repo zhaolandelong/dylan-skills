@@ -6,7 +6,7 @@
   "bin": {
     "dylan-wechat-to-md": "./scripts/wechat_to_md.mjs"
   },
-  "dependencies": {
+  "peerDependencies": {
     "cheerio": "1.0.0-rc.12",
     "turndown": "^7.1.3"
   },

@@ -14,6 +14,12 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 
 - 需要本机安装 Chromium/Chrome（用于 `playwright-core` 启动浏览器）。常见可执行文件路径：`/usr/bin/chromium`、`/usr/bin/google-chrome` 等
 
+## 依赖约定
+
+- 本 skill 的 npm 依赖声明在 `package.json` 的 `peerDependencies` 中，目的是复用宿主环境依赖，避免在 skill 自己目录重复安装
+- Agent 执行前应先假设宿主项目/全局环境已经安装这些依赖；不要默认进入 `skills/dylan-yitang-to-md` 再执行 `npm install` / `pnpm install` / `yarn install`
+- 若运行时报缺少模块，再提示用户在宿主环境补装 `cheerio`、`jsqr`、`playwright-core`、`pngjs`、`qrcode-terminal`、`turndown`，然后重试
+
 ## 入参
 
 本 skill 拆成 2 个入口：

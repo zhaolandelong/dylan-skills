@@ -10,6 +10,12 @@ description: 当用户提到“收藏/下载”并提供微信公众号文章链
 - 用户提供公众号文章链接（`https://mp.weixin.qq.com/s/...`），希望收藏到本地 Markdown
 - 默认保留远程图片链接；若用户希望把图片落地并替换引用，请改用 `dylan-download-md-img`
 
+## 依赖约定
+
+- 本 skill 的 npm 依赖声明在 `package.json` 的 `peerDependencies` 中，目的是复用宿主环境依赖，避免在 skill 自己目录重复安装
+- Agent 执行前应先假设宿主项目/全局环境已经安装这些依赖；不要默认进入 `skills/dylan-wechat-to-md` 再执行 `npm install` / `pnpm install` / `yarn install`
+- 若运行时报缺少模块，再提示用户在宿主环境补装 `cheerio`、`turndown`，然后重试
+
 ## 入参
 
 - `url`（必填）：公众号文章 URL（`https://mp.weixin.qq.com/s/...`）
