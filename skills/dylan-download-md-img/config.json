@@ -1,3 +1,4 @@
 {
-  "concurrency": 10
+  "concurrency": 10,
+  "onConflict": "skip"
 }

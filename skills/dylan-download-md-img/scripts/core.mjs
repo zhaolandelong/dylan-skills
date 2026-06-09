@@ -43,7 +43,13 @@ export async function ensureMarkdownHasArticleId(markdownPath) {
   return { articleId, changed: next !== text };
 }
 
-export async function downloadImagesAndRewriteMarkdown({ markdownPath, cookie = '', concurrency = 10, log = () => {} }) {
+export async function downloadImagesAndRewriteMarkdown({
+  markdownPath,
+  cookie = '',
+  concurrency = 10,
+  onConflict = 'skip',
+  log = () => {}
+}) {
   const absPath = path.resolve(markdownPath);
   const mdDir = path.dirname(absPath);
 
@@ -75,10 +81,21 @@ export async function downloadImagesAndRewriteMarkdown({ markdownPath, cookie = 
           retries: 2
         });
         const ext = pickImageExt(imageUrl, contentType);
-        const fileName = `img-${String(index).padStart(3, '0')}${ext}`;
-        const filePath = path.join(imageDir, fileName);
-        await fs.writeFile(filePath, buffer);
-        urlToLocal.set(imageUrl, `${articleId}/${fileName}`);
+        const baseName = `img-${String(index).padStart(3, '0')}`;
+        const initialPath = path.join(imageDir, `${baseName}${ext}`);
+        const resolved = await resolveImageOutputPath(initialPath, onConflict);
+        if (resolved.action === 'skip') {
+          log(`文件已存在，跳过下载: ${path.basename(resolved.filePath)}`);
+          urlToLocal.set(imageUrl, `${articleId}/${path.basename(resolved.filePath)}`);
+          return;
+        }
+
+        if (resolved.action === 'rename') {
+          log(`文件已存在，重命名保存: ${path.basename(resolved.filePath)}`);
+        }
+
+        await fs.writeFile(resolved.filePath, buffer);
+        urlToLocal.set(imageUrl, `${articleId}/${path.basename(resolved.filePath)}`);
       } catch (e) {
         log(`下载失败，已跳过: ${String(e?.message || e)}`);
       }
@@ -230,4 +247,44 @@ function pickImageExt(imageUrl, contentType) {
 
 function isSupportedImageExt(ext) {
   return ext === '.jpg' || ext === '.jpeg' || ext === '.png' || ext === '.gif' || ext === '.webp';
+}
+
+async function resolveImageOutputPath(filePath, onConflict) {
+  const normalizedPolicy = normalizeConflictPolicy(onConflict);
+  if (!(await fileExists(filePath))) {
+    return { action: 'write', filePath };
+  }
+
+  if (normalizedPolicy === 'overwrite') {
+    return { action: 'overwrite', filePath };
+  }
+
+  if (normalizedPolicy === 'rename') {
+    const parsed = path.parse(filePath);
+    for (let i = 2; ; i += 1) {
+      const nextPath = path.join(parsed.dir, `${parsed.name}-${i}${parsed.ext}`);
+      if (!(await fileExists(nextPath))) {
+        return { action: 'rename', filePath: nextPath };
+      }
+    }
+  }
+
+  return { action: 'skip', filePath };
+}
+
+function normalizeConflictPolicy(policy) {
+  const value = String(policy || '')
+    .trim()
+    .toLowerCase();
+  if (value === 'overwrite' || value === 'rename') return value;
+  return 'skip';
+}
+
+async function fileExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }

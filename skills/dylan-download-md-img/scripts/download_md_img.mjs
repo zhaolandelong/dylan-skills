@@ -9,7 +9,8 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     cookie: { type: 'string' },
-    concurrency: { type: 'string' }
+    concurrency: { type: 'string' },
+    'on-conflict': { type: 'string' }
   }
 });
 
@@ -36,13 +37,15 @@ const cookie = values.cookie || '';
 const configConcurrency = Number.parseInt(String(config?.concurrency ?? ''), 10);
 const cliConcurrency = Number.parseInt(String(values.concurrency || ''), 10);
 const concurrency = Math.max(1, Number.isFinite(cliConcurrency) ? cliConcurrency : Number.isFinite(configConcurrency) ? configConcurrency : 10);
+const onConflict = normalizeConflictPolicy(values['on-conflict'] || config?.onConflict);
 const log = (message) => process.stderr.write(`[download-md-img] ${message}\n`);
 
 log(`Markdown: ${absPath}`);
 if (cookie) log('Cookie: 已提供');
 log(`并发: ${concurrency}`);
+log(`重名策略: ${onConflict}`);
 
-await downloadImagesAndRewriteMarkdown({ markdownPath: absPath, cookie, concurrency, log });
+await downloadImagesAndRewriteMarkdown({ markdownPath: absPath, cookie, concurrency, onConflict, log });
 
 process.stdout.write(`${absPath}\n`);
 
@@ -54,4 +57,12 @@ async function readJsonFile(filePath) {
   } catch {
     return {};
   }
+}
+
+function normalizeConflictPolicy(policy) {
+  const value = String(policy || '')
+    .trim()
+    .toLowerCase();
+  if (value === 'overwrite' || value === 'rename') return value;
+  return 'skip';
 }
