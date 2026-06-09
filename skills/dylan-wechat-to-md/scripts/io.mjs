@@ -160,21 +160,49 @@ export async function fileExists(filePath) {
   }
 }
 
-export async function writeMarkdownFile({ outDir, title, markdown }) {
+export async function writeMarkdownFile({
+  outDir,
+  title,
+  markdown,
+  titleConflict = 'skip'
+}) {
   await ensureDir(outDir);
   const candidates = getCandidateFilenames(title);
 
-  for (const baseName of candidates) {
-    const fullPath = path.join(outDir, baseName);
-    if (!(await fileExists(fullPath))) {
-      await fs.writeFile(fullPath, markdown, 'utf8');
-      return fullPath;
+  const primaryPath = path.join(outDir, candidates[0]);
+  const primaryExists = await fileExists(primaryPath);
+
+  if (!primaryExists) {
+    await fs.writeFile(primaryPath, markdown, 'utf8');
+    return { path: primaryPath, action: 'created' };
+  }
+
+  if (titleConflict === 'skip') {
+    return { path: primaryPath, action: 'skipped' };
+  }
+
+  if (titleConflict === 'overwrite') {
+    await fs.writeFile(primaryPath, markdown, 'utf8');
+    return { path: primaryPath, action: 'overwritten' };
+  }
+
+  if (titleConflict === 'rename') {
+    for (const baseName of candidates.slice(1)) {
+      const fullPath = path.join(outDir, baseName);
+      if (!(await fileExists(fullPath))) {
+        await fs.writeFile(fullPath, markdown, 'utf8');
+        return { path: fullPath, action: 'renamed' };
+      }
     }
+  }
+
+  if (titleConflict !== 'rename') {
+    throw new Error(`未知的 titleConflict: ${titleConflict}`);
   }
 
   const fallback = path.join(outDir, `wechat-article-${Date.now()}.md`);
   await fs.writeFile(fallback, markdown, 'utf8');
-  return fallback;
+  return { path: fallback, action: 'renamed' };
 }
 
 async function readAll(stream) {

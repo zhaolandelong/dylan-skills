@@ -1,5 +1,5 @@
 {
   "outDir": "./test-docs",
   "cookie": "",
-  "downloadImages": false
+  "titleConflict": "skip"
 }
