@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { chromium } from "playwright-core";
-import { ensureDir, pickChromiumExecutablePath } from "./io.mjs";
+import { ensureDir, pickChromiumExecutablePath, readJsonFile } from "./io.mjs";
 import { renderTerminalQrFromPng } from "./qr_terminal.mjs";
 
 const LOGIN_URL = "https://sso.yitang.top/account/login/";
@@ -23,8 +23,12 @@ const targetUrl = String(
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const skillRoot = path.resolve(scriptDir, "..");
 const storageStatePath = path.join(skillRoot, "storageState.json");
+const configPath = path.join(skillRoot, "config.json");
+const config = await readJsonFile(configPath);
 
-const executablePath = await pickChromiumExecutablePath();
+const executablePath = await pickChromiumExecutablePath({
+  configChromePath: config?.chromePath,
+});
 const browser = await chromium.launch({ headless: true, executablePath });
 const context = await browser.newContext({
   locale: "zh-CN",
@@ -71,7 +75,7 @@ try {
     .waitForLoadState("networkidle", { timeout: 15000 })
     .catch(() => {});
   await saveStorageStateSilently(context, storageStatePath);
-  await verifyStorageState(storageStatePath, targetUrl);
+  await verifyStorageState(storageStatePath, targetUrl, executablePath);
   console.error(`登录完成，已更新: ${storageStatePath}`);
 } finally {
   await context.close();
@@ -272,10 +276,10 @@ async function getIframeQrImage(page) {
   }
 }
 
-async function verifyStorageState(storageStatePath, url) {
+async function verifyStorageState(storageStatePath, url, executablePath) {
   const browser = await chromium.launch({
     headless: true,
-    executablePath: await pickChromiumExecutablePath(),
+    executablePath,
   });
   const context = await browser.newContext({
     storageState: storageStatePath,

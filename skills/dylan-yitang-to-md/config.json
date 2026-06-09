@@ -1,5 +1,10 @@
 {
   "outDir": "./test-docs",
   "cookie": "",
-  "onConflict": "skip"
+  "onConflict": "skip",
+  "chromePath": {
+    "linux": "",
+    "mac": "",
+    "windows": ""
+  }
 }

@@ -154,7 +154,37 @@ export async function fetchBuffer(url, { headers = {}, maxRedirects = 5 } = {}) 
   });
 }
 
-export async function pickChromiumExecutablePath() {
+export function pickConfigChromePath(configChromePath, platform = process.platform) {
+  if (typeof configChromePath === 'string') {
+    const s = configChromePath.trim();
+    return s || '';
+  }
+
+  if (!configChromePath || typeof configChromePath !== 'object') return '';
+
+  const aliasMap = {
+    linux: ['linux'],
+    darwin: ['mac', 'darwin', 'macos', 'osx'],
+    win32: ['windows', 'win32', 'win']
+  };
+  const keys = aliasMap[platform] || [platform];
+  for (const key of keys) {
+    const value = configChromePath[key];
+    if (typeof value !== 'string') continue;
+    const s = value.trim();
+    if (s) return s;
+  }
+
+  return '';
+}
+
+export async function pickChromiumExecutablePath({ configChromePath } = {}) {
+  const configuredPath = pickConfigChromePath(configChromePath);
+  if (configuredPath) {
+    if (await fileExists(configuredPath)) return configuredPath;
+    throw new Error(`config.chromePath 指定的 Chrome 路径不存在: ${configuredPath}`);
+  }
+
   const envPath =
     process.env.YT_CHROME_PATH ||
     process.env.CHROME_PATH ||
@@ -162,20 +192,33 @@ export async function pickChromiumExecutablePath() {
     '';
   if (envPath && (await fileExists(envPath))) return envPath;
 
-  const candidates = [
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/google-chrome',
-    '/usr/bin/google-chrome-stable',
-    '/snap/bin/chromium'
-  ];
+  const candidatesByPlatform = {
+    linux: [
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/snap/bin/chromium'
+    ],
+    darwin: [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium'
+    ],
+    win32: [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files\\Chromium\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Chromium\\Application\\chrome.exe'
+    ]
+  };
+  const candidates = candidatesByPlatform[process.platform] || candidatesByPlatform.linux;
 
   for (const p of candidates) {
     if (await fileExists(p)) return p;
   }
 
   throw new Error(
-    '未找到 Chromium/Chrome 可执行文件。请安装 chromium/chrome，或设置环境变量 YT_CHROME_PATH 指向可执行文件路径。'
+    '未找到 Chromium/Chrome 可执行文件。请安装 chromium/chrome，或在 config.json 中设置 chromePath，或设置环境变量 YT_CHROME_PATH 指向可执行文件路径。'
   );
 }
 

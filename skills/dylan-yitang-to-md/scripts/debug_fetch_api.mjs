@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright-core';
-import { fileExists, pickChromiumExecutablePath } from './io.mjs';
+import { fileExists, pickChromiumExecutablePath, readJsonFile } from './io.mjs';
 
 const API_PREFIX = 'https://yitang.top/api/feishu/get-doc-blocks';
 
@@ -29,13 +29,17 @@ const outPath = path.resolve(cwd, values.out || './data.txt');
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const skillRoot = path.resolve(scriptDir, '..');
+const configPath = path.join(skillRoot, 'config.json');
 const storageStatePath = path.resolve(skillRoot, values.state || './storageState.json');
 const hasStorageState = await fileExists(storageStatePath);
+const config = await readJsonFile(configPath);
 
 const scrollSteps = clampInt(values.scroll, 120, 1, 2000);
 const headless = values.headed ? false : true;
 
-const executablePath = await pickChromiumExecutablePath();
+const executablePath = await pickChromiumExecutablePath({
+  configChromePath: config?.chromePath
+});
 const browser = await chromium.launch({ headless, executablePath });
 const context = await browser.newContext({
   storageState: hasStorageState ? storageStatePath : undefined,
@@ -114,4 +118,3 @@ function clampInt(raw, fallback, min, max) {
   if (n > max) return max;
   return n;
 }
-

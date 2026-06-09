@@ -73,7 +73,9 @@ await main();
 async function main() {
   const startedAt = Date.now();
   console.error(`开始下载: ${url}`);
-  const executablePath = await pickChromiumExecutablePath();
+  const executablePath = await pickChromiumExecutablePath({
+    configChromePath: config?.chromePath
+  });
   const browser = await chromium.launch({ headless, executablePath });
   const context = await createContext({
     browser,

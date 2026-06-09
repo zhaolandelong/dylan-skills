@@ -13,6 +13,7 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 ## 系统依赖
 
 - 需要本机安装 Chromium/Chrome（用于 `playwright-core` 启动浏览器）。常见可执行文件路径：`/usr/bin/chromium`、`/usr/bin/google-chrome` 等
+- 浏览器路径解析优先级：`config.json` 的 `chromePath` > 环境变量 `YT_CHROME_PATH` / `CHROME_PATH` / `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` > 系统默认安装路径
 
 ## 依赖约定
 
@@ -44,6 +45,17 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 - `outDir`：输出目录（必填）
 - `cookie`：默认 Cookie（可选）
 - `onConflict`：重名处理策略，支持 `skip` / `overwrite` / `rename`，默认 `skip`
+- `chromePath`：Chrome/Chromium 可执行文件路径。支持直接写字符串，也支持按平台分别配置：
+
+```json
+{
+  "chromePath": {
+    "linux": "/usr/bin/google-chrome",
+    "mac": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "windows": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+  }
+}
+```
 
 ## 登录行为
 

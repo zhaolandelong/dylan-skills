@@ -7,7 +7,7 @@
     "dylan-yitang-to-md": "./scripts/yitang_to_md.mjs",
     "dylan-yitang-login": "./scripts/yitang_login.mjs"
   },
-  "peerDependencies": {
+  "dependencies": {
     "cheerio": "1.0.0-rc.12",
     "jsqr": "^1.4.0",
     "playwright-core": "^1.53.1",
