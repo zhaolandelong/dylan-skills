@@ -1,4 +1,5 @@
 {
   "outDir": "./test-docs",
-  "cookie": ""
+  "cookie": "",
+  "onConflict": "skip"
 }

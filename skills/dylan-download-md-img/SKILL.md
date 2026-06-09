@@ -13,6 +13,8 @@ description: Downloads all remote images in a local Markdown file to a local fol
 
 - `mdPath`（必填）：本地 Markdown 文件路径
 - `--cookie "<cookie>"`（可选）：部分图片需要 Cookie 才能访问时使用
+- `--concurrency <number>`（可选）：下载并发数，默认 `10`
+- 也可以通过 [config.json](./config.json) 提供默认值：`concurrency`：下载并发数，默认 `10`
 
 ## 输出
 

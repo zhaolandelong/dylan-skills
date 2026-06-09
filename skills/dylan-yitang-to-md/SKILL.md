@@ -39,7 +39,7 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 - `--overwrite` / `--rename`（可选）：`--on-conflict` 的快捷写法
 - `--headed`（可选）：调试用，非 headless 运行
 
-也可以通过 [config.json](file:///home/dylan/projects/dylan-skills/skills/dylan-yitang-to-md/config.json) 提供默认值：
+也可以通过 [config.json](./config.json) 提供默认值：
 
 - `outDir`：输出目录（必填）
 - `cookie`：默认 Cookie（可选）
