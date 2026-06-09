@@ -1,0 +1,16 @@
+{
+  "name": "dylan-download-md-img",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "dylan-download-md-img": "./scripts/download_md_img.mjs"
+  },
+  "files": [
+    "SKILL.md",
+    "scripts/"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
