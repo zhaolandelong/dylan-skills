@@ -4,9 +4,8 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright-core';
-import { buildArticleId, buildMarkdownDoc, htmlToMarkdown, isProbablyYitangDocUrl, normalizeContentHtml, pickOutDir } from './core.mjs';
-import { buildCookieHeader, ensureDir, fileExists, parseCookieString, pickChromiumExecutablePath, readJsonFile, resolveMarkdownOutputTarget, writeMarkdownFile } from './io.mjs';
-import { downloadImagesForMarkdown } from './images.mjs';
+import { buildMarkdownDoc, htmlToMarkdown, isProbablyYitangDocUrl, normalizeContentHtml, pickOutDir } from './core.mjs';
+import { ensureDir, fileExists, parseCookieString, pickChromiumExecutablePath, readJsonFile, resolveMarkdownOutputTarget, writeMarkdownFile } from './io.mjs';
 
 const DEFAULT_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
@@ -68,7 +67,6 @@ const headed = values.headed ?? false;
 const headless = !headed;
 
 const fetchedAt = new Date().toISOString();
-const articleId = buildArticleId(url);
 
 await main();
 
@@ -92,6 +90,9 @@ async function main() {
     await settleNavigation(page);
 
     if (await isLoginPage(page)) {
+      const loginShot = path.join(os.tmpdir(), `yitang-login-page-${Date.now()}.png`);
+      await page.screenshot({ path: loginShot, fullPage: true }).catch(() => {});
+      console.error(`疑似登录页截图: ${loginShot}`);
       if (cookie) {
         console.error('Cookie 可能无效或已失效，开始进入扫码登录流程');
       }
@@ -103,7 +104,7 @@ async function main() {
       await settleNavigation(page);
     }
 
-    await waitForContentReady(page, 30000);
+    await waitForContentReady(page, 120000);
 
     const header = await extractPageHeader(page);
     const pageTitle = (await page.title()).trim();
@@ -164,15 +165,7 @@ async function main() {
     }
 
     if (downloadImages) {
-      console.error('下载图片...');
-      const cookies = await context.cookies();
-      const cookieHeader = buildCookieHeader(cookies);
-      await downloadImagesForMarkdown({
-        markdownPath: outputPath,
-        pageUrl: url,
-        articleId,
-        cookieHeader
-      });
+      console.error('已移除图片下载功能；如需下载图片并改写链接，请使用 dylan-download-md-img');
     }
 
     await saveStorageStateSilently(context, storageStatePath);
@@ -252,30 +245,78 @@ async function isLoginPage(page) {
 }
 
 async function ensureLoggedInByQr({ page, context, storageStatePath }) {
+  page.setDefaultTimeout(QR_SCAN_TIMEOUT_MS);
   const screenshotPath = path.join(os.tmpdir(), `yitang-login-${Date.now()}.png`);
   await saveLoginQrScreenshot(page, screenshotPath);
   console.error(`请在 2 分钟内扫码登录: ${screenshotPath}`);
 
-  await page.waitForFunction(() => {
-    const u = location.href;
-    if (u.includes('/fs-doc/')) return true;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < QR_SCAN_TIMEOUT_MS) {
+    const ok = await safeEvaluate(page, () => {
+      const u = location.href;
+      if (u.includes('/fs-doc/')) return true;
 
-    const s = (document.body?.innerText || '').trim();
-    const isLoginLike = s.includes('微信登录') || (document.title || '').includes('登录') || u.includes('/login');
-    if (!isLoginLike) return true;
+      const s = (document.body?.innerText || '').trim();
+      const isLoginLike = s.includes('微信登录') || (document.title || '').includes('登录') || u.includes('/login');
+      if (!isLoginLike) return true;
 
-    const mainCandidates = [
-      document.querySelector('article'),
-      document.querySelector('main'),
-      document.querySelector('[role="main"]')
-    ].filter(Boolean);
-    const maxLen = Math.max(0, ...mainCandidates.map((el) => (el?.innerText || '').trim().length));
-    return maxLen > 1000;
-  }, { timeout: QR_SCAN_TIMEOUT_MS });
+      const mainCandidates = [
+        document.querySelector('.page-block-children'),
+        document.querySelector('.page-main'),
+        document.querySelector('article'),
+        document.querySelector('main'),
+        document.querySelector('[role="main"]')
+      ].filter(Boolean);
+      const maxLen = Math.max(0, ...mainCandidates.map((el) => (el?.innerText || '').trim().length));
+      return maxLen > 1000;
+    });
+    if (ok) break;
+
+    const refreshed = await tryRefreshQr(page);
+    if (refreshed) {
+      await page.waitForTimeout(800);
+      await saveLoginQrScreenshot(page, screenshotPath).catch(() => {});
+    }
+
+    await page.waitForTimeout(800);
+  }
+
+  if (await isLoginPage(page)) {
+    throw new Error('扫码登录超时（二维码可能已过期或未完成登录）');
+  }
 
   await page.waitForLoadState('domcontentloaded');
 
   await saveStorageStateSilently(context, storageStatePath);
+}
+
+async function tryRefreshQr(page) {
+  return await safeEvaluate(page, () => {
+    const text = (document.body?.innerText || '').trim();
+    const looksExpired = text.includes('已失效') || text.includes('过期') || text.includes('刷新') || text.includes('重新获取');
+    if (!looksExpired) return false;
+
+    const candidates = Array.from(document.querySelectorAll('button,a,div,span')).filter((el) => {
+      const t = (el?.innerText || '').trim();
+      if (!t) return false;
+      return t.includes('刷新') || t.includes('重新获取') || t.includes('重新加载') || t.includes('点击重试');
+    });
+    for (const el of candidates) {
+      const rect = el.getBoundingClientRect?.();
+      if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+      try {
+        el.click();
+        return true;
+      } catch {}
+    }
+
+    try {
+      location.reload();
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 async function saveLoginQrScreenshot(page, outPath) {
@@ -939,24 +980,43 @@ async function collectPageBlockChildrenHtml(page, { warmupImages }) {
 
 async function waitForContentReady(page, timeoutMs) {
   const started = Date.now();
+  await page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => {});
+  await page.waitForLoadState('load', { timeout: timeoutMs }).catch(() => {});
+
+  await page
+    .waitForFunction(() => {
+      return Boolean(document.querySelector('.page-main, .page-block-children, article, main, [role="main"]'));
+    }, { timeout: Math.min(30000, timeoutMs) })
+    .catch(() => {});
+
+  let stable = 0;
+  let lastMainLen = 0;
   for (;;) {
     const now = Date.now();
     if (now - started > timeoutMs) return;
 
     const snapshot = await safeEvaluate(page, () => {
-      const text = (document.body?.innerText || '').trim();
-      const candidates = [
-        document.querySelector('article'),
-        document.querySelector('main'),
-        document.querySelector('[role="main"]'),
-        document.querySelector('.doc-content'),
-        document.querySelector('#app')
-      ].filter(Boolean);
-      const mainTextLength = Math.max(
-        0,
-        ...candidates.map((el) => (el?.innerText || '').trim().length)
-      );
-      return { bodyTextLength: text.length, mainTextLength, textHead: text.slice(0, 50) };
+      const title = (document.title || '').trim();
+      const bodyText = (document.body?.innerText || '').trim();
+
+      const mainEl =
+        document.querySelector('.page-block-children') ||
+        document.querySelector('.page-main') ||
+        document.querySelector('article') ||
+        document.querySelector('main') ||
+        document.querySelector('[role="main"]') ||
+        document.querySelector('.doc-content') ||
+        document.querySelector('#app');
+
+      const mainText = (mainEl?.innerText || '').trim();
+      const head = bodyText.slice(0, 80);
+
+      return {
+        title,
+        bodyTextLength: bodyText.length,
+        mainTextLength: mainText.length,
+        textHead: head
+      };
     });
 
     const looksLikeLoading =
@@ -964,10 +1024,16 @@ async function waitForContentReady(page, timeoutMs) {
       snapshot.textHead.includes('加载中') ||
       snapshot.textHead.includes('loading');
 
-    if (!looksLikeLoading && (snapshot.mainTextLength >= 800 || snapshot.bodyTextLength >= 1200)) return;
+    const mainTextGrew = snapshot.mainTextLength > lastMainLen + 80;
+    lastMainLen = snapshot.mainTextLength;
+    if (mainTextGrew) stable = 0;
+    else stable += 1;
 
-    await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => {});
-    await page.waitForTimeout(250);
+    if (!looksLikeLoading && snapshot.mainTextLength >= 600 && stable >= 4) return;
+
+    const remaining = timeoutMs - (Date.now() - started);
+    await page.waitForLoadState('networkidle', { timeout: Math.min(12000, Math.max(1000, remaining)) }).catch(() => {});
+    await page.waitForTimeout(400);
   }
 }
 

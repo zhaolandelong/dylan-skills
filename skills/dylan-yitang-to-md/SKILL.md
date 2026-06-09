@@ -1,6 +1,6 @@
 ---
 name: dylan-yitang-to-md
-description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/...)导出为本地 Markdown 时使用。包含：扫码登录更新 storageState、导出文章（默认不下载图片）、按 article_id 批量下载图片并回写链接。
+description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/...)导出为本地 Markdown 时使用。包含：扫码登录更新 storageState、导出文章（不下载图片；如需本地化图片请调用 dylan-download-md-img）。
 ---
 
 # dylan-yitang-to-md
@@ -8,8 +8,7 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 ## 何时使用
 
 - 用户需要扫码登录一堂，拿到可复用的登录态（`storageState.json`）
-- 用户说“收藏/下载/保存”并提供一堂文档链接（`https://yitang.top/fs-doc/...`），希望导出为本地 Markdown（默认不下载图片）
-- 用户已有 Markdown（含 frontmatter 的 `article_id`）并希望把图片批量下载到本地并替换链接（失败的不替换）
+- 用户说“收藏/下载/保存”并提供一堂文档链接（`https://yitang.top/fs-doc/...`），希望导出为本地 Markdown
 
 ## 系统依赖
 
@@ -17,7 +16,7 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 
 ## 入参
 
-本 skill 拆成 3 个入口：
+本 skill 拆成 2 个入口：
 
 ### 1) 登录一堂（扫码）
 
@@ -30,23 +29,14 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 - `url`（必填）：一堂文档 URL（`https://yitang.top/fs-doc/...`）
 - `--out <dir>`（可选）：输出目录。支持相对路径/绝对路径/`~/...`；相对路径以当前工作目录为基准。若未传且 config 未配置会报错
 - `--cookie "<cookie>"`（可选）：从浏览器复制的 Cookie，用于免扫码登录（优先尝试）
-- `--download-images` / `--no-download-images`（可选）：是否下载图片，默认 **关闭**
 - `--on-conflict <mode>`（可选）：重名处理策略，支持 `skip` / `overwrite` / `rename`，默认 `skip`
 - `--overwrite` / `--rename`（可选）：`--on-conflict` 的快捷写法
 - `--headed`（可选）：调试用，非 headless 运行
-
-### 3) 下载图片到本地并回写链接
-
-- 脚本：`node skills/dylan-yitang-to-md/scripts/yitang_images.mjs "<article_id>"`
-- `article_id`（必填）：Markdown frontmatter 里的 `article_id`（例如 `yt-xxxx`）
-- `--out <dir>`（可选）：输出目录（用于定位对应 Markdown；默认取 config 的 outDir）
-- 行为：找到对应 Markdown，下载其图片到本地目录，并只替换下载成功的图片链接（下载失败的不替换）
 
 也可以通过 [config.json](file:///home/dylan/projects/dylan-skills/skills/dylan-yitang-to-md/config.json) 提供默认值：
 
 - `outDir`：输出目录（必填）
 - `cookie`：默认 Cookie（可选）
-- `downloadImages`：是否下载图片（默认 false）
 - `onConflict`：重名处理策略，支持 `skip` / `overwrite` / `rename`，默认 `skip`
 
 ## 登录行为
@@ -58,7 +48,7 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 
 - 写入一个 Markdown 文件到输出目录（文件名基于文档标题生成；默认重名直接跳过，可通过参数改为覆盖或重命名）
 - Markdown 顶部包含 frontmatter：`article_id` / `title` / `source_url` / `fetched_at`
-- 图片下载（可选）：会在 Markdown 同级创建 `article_id` 同名目录存放图片，并把 Markdown 图片链接替换为相对路径；下载失败的图片链接保持原样
+- 若需要下载并本地化图片，请调用 `dylan-download-md-img`（会在 Markdown 同级创建 `article_id/` 目录并回写链接）
 - 成功时 stdout 输出生成的 Markdown 文件路径（单行）；失败时 stderr 输出错误信息并以非 0 退出码退出
 
 ## 调用
@@ -73,8 +63,4 @@ node skills/dylan-yitang-to-md/scripts/yitang_to_md.mjs "https://yitang.top/fs-d
 
 ```bash
 node skills/dylan-yitang-to-md/scripts/yitang_to_md.mjs "https://yitang.top/fs-doc/..." --out "/abs/path/to/dir" --cookie "key=value; ..."
-```
-
-```bash
-node skills/dylan-yitang-to-md/scripts/yitang_images.mjs "yt-xxxxxxxxxxxx"
 ```

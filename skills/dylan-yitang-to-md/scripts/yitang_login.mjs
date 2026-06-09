@@ -1,11 +1,21 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 import { chromium } from 'playwright-core';
 import { ensureDir, pickChromiumExecutablePath } from './io.mjs';
 
 const LOGIN_URL = 'https://sso.yitang.top/account/login/';
 const QR_SCAN_TIMEOUT_MS = 2 * 60 * 1000;
+
+const { values, positionals } = parseArgs({
+  allowPositionals: true,
+  options: {
+    url: { type: 'string' }
+  }
+});
+
+const targetUrl = String(positionals[0] || values.url || 'https://yitang.top/').trim();
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const skillRoot = path.resolve(scriptDir, '..');
@@ -46,7 +56,10 @@ try {
   }, { timeout: QR_SCAN_TIMEOUT_MS });
 
   await page.waitForLoadState('domcontentloaded');
+  await page.goto(targetUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
   await saveStorageStateSilently(context, storageStatePath);
+  await verifyStorageState(storageStatePath, targetUrl);
   console.error(`登录完成，已更新: ${storageStatePath}`);
 } finally {
   await context.close();
@@ -151,8 +164,8 @@ async function waitForQrReady(page) {
       if (box && box.width > 120 && box.height > 120) return { kind: 'login-iframe' };
     }
 
-    if (Date.now() - startedAt > 30000) {
-      throw new Error('二维码在 30s 内未出现：主页面 img、#login_container、#login_container iframe 都未就绪');
+    if (Date.now() - startedAt > QR_SCAN_TIMEOUT_MS) {
+      throw new Error('二维码在 2 分钟内未出现：主页面 img、#login_container、#login_container iframe 都未就绪');
     }
     await page.waitForTimeout(300);
   }
@@ -221,5 +234,38 @@ async function getIframeQrImage(page) {
     return img;
   } catch {
     return null;
+  }
+}
+
+async function verifyStorageState(storageStatePath, url) {
+  const browser = await chromium.launch({ headless: true, executablePath: await pickChromiumExecutablePath() });
+  const context = await browser.newContext({
+    storageState: storageStatePath,
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai'
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+
+    const isLogin = await page.evaluate(() => {
+      const u = location.href;
+      const s = (document.body?.innerText || '').trim();
+      if (u.includes('/account/login') || u.includes('/login')) return true;
+      if (s.includes('微信登录')) return true;
+      const title = (document.title || '').trim();
+      if (title.includes('登录')) return true;
+      return false;
+    }).catch(() => false);
+
+    if (isLogin) {
+      const out = path.join(skillRoot, 'login-verify.png');
+      await page.screenshot({ path: out, fullPage: true }).catch(() => {});
+      throw new Error(`storageState 校验失败：仍然是登录页（截图: ${out}）`);
+    }
+  } finally {
+    await context.close();
+    await browser.close();
   }
 }

@@ -5,8 +5,7 @@
   "type": "module",
   "bin": {
     "dylan-yitang-to-md": "./scripts/yitang_to_md.mjs",
-    "dylan-yitang-login": "./scripts/yitang_login.mjs",
-    "dylan-yitang-images": "./scripts/yitang_images.mjs"
+    "dylan-yitang-login": "./scripts/yitang_login.mjs"
   },
   "dependencies": {
     "cheerio": "1.0.0-rc.12",
