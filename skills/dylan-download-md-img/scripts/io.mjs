@@ -18,11 +18,29 @@ export async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
 
-export async function fetchBuffer(url, { headers = {}, maxRedirects = 5 } = {}) {
+export async function fetchBuffer(
+  url,
+  {
+    headers = {},
+    maxRedirects = 5,
+    timeoutMs = 30_000,
+    maxBytes = 25 * 1024 * 1024
+  } = {}
+) {
   const u = new URL(url);
   const client = u.protocol === 'https:' ? https : http;
 
   return await new Promise((resolve, reject) => {
+    let timer = null;
+    let settled = false;
+    const done = (err, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve(value);
+    };
+
     const req = client.request(
       u,
       {
@@ -45,32 +63,56 @@ export async function fetchBuffer(url, { headers = {}, maxRedirects = 5 } = {}) 
           ) {
             res.resume();
             const next = new URL(location, u).toString();
-            resolve(
-              await fetchBuffer(next, { headers, maxRedirects: maxRedirects - 1 })
+            done(
+              null,
+              await fetchBuffer(next, {
+                headers,
+                maxRedirects: maxRedirects - 1,
+                timeoutMs,
+                maxBytes
+              })
             );
             return;
           }
 
           if (status < 200 || status >= 300) {
-            reject(new Error(`请求失败: ${status}`));
+            done(new Error(`请求失败: ${status}`));
             return;
           }
 
           const chunks = [];
+          let total = 0;
+          res.on('data', (c) => {
+            total += c.length || 0;
+            if (total > maxBytes) {
+              res.destroy(new Error(`响应过大: ${total} bytes`));
+            }
+          });
+          res.setTimeout(timeoutMs, () => {
+            res.destroy(new Error(`响应超时: ${timeoutMs}ms`));
+          });
+
           for await (const c of res) chunks.push(c);
           const buf = Buffer.concat(chunks);
           const encoding = String(res.headers['content-encoding'] || '').toLowerCase();
           const decoded = await decodeBody(buf, encoding);
           const contentType = String(res.headers['content-type'] || '');
-          resolve({ buffer: decoded, contentType });
+          done(null, { buffer: decoded, contentType });
         } catch (err) {
-          reject(err);
+          done(err);
         }
       }
     );
 
-    req.on('error', reject);
+    req.on('error', done);
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`请求超时: ${timeoutMs}ms`));
+    });
     req.end();
+
+    timer = setTimeout(() => {
+      req.destroy(new Error(`请求超时: ${timeoutMs}ms`));
+    }, timeoutMs);
   });
 }
 

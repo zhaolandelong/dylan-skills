@@ -43,7 +43,7 @@ export async function ensureMarkdownHasArticleId(markdownPath) {
   return { articleId, changed: next !== text };
 }
 
-export async function downloadImagesAndRewriteMarkdown({ markdownPath, cookie = '', log = () => {} }) {
+export async function downloadImagesAndRewriteMarkdown({ markdownPath, cookie = '', concurrency = 10, log = () => {} }) {
   const absPath = path.resolve(markdownPath);
   const mdDir = path.dirname(absPath);
 
@@ -61,25 +61,29 @@ export async function downloadImagesAndRewriteMarkdown({ markdownPath, cookie = 
 
   log(`下载图片: ${urls.length} 张 -> ${imageDir}`);
   const urlToLocal = new Map();
-  let index = 0;
 
-  for (const imageUrl of urls) {
-    index += 1;
-    log(`(${index}/${urls.length}) ${imageUrl}`);
-    try {
-      const { buffer, contentType } = await fetchBuffer(
-        imageUrl,
-        cookie ? { headers: { cookie } } : undefined
-      );
-      const ext = pickImageExt(imageUrl, contentType);
-      const fileName = `img-${String(index).padStart(3, '0')}${ext}`;
-      const filePath = path.join(imageDir, fileName);
-      await fs.writeFile(filePath, buffer);
-      urlToLocal.set(imageUrl, `${articleId}/${fileName}`);
-    } catch (e) {
-      log(`下载失败，已跳过: ${String(e?.message || e)}`);
+  const parallel = Math.max(1, Number(concurrency) || 10);
+  await runWithConcurrency(
+    urls.map((imageUrl, i) => ({ imageUrl, index: i + 1 })),
+    parallel,
+    async ({ imageUrl, index }) => {
+      log(`(${index}/${urls.length}) ${imageUrl}`);
+      try {
+        const { buffer, contentType } = await fetchImageBuffer(imageUrl, {
+          cookie,
+          timeoutMs: 30_000,
+          retries: 2
+        });
+        const ext = pickImageExt(imageUrl, contentType);
+        const fileName = `img-${String(index).padStart(3, '0')}${ext}`;
+        const filePath = path.join(imageDir, fileName);
+        await fs.writeFile(filePath, buffer);
+        urlToLocal.set(imageUrl, `${articleId}/${fileName}`);
+      } catch (e) {
+        log(`下载失败，已跳过: ${String(e?.message || e)}`);
+      }
     }
-  }
+  );
 
   let next = raw;
   for (const [u, local] of urlToLocal.entries()) {
@@ -98,6 +102,46 @@ export async function downloadImagesAndRewriteMarkdown({ markdownPath, cookie = 
     downloaded: urlToLocal.size,
     rewritten
   };
+}
+
+async function runWithConcurrency(items, concurrency, worker) {
+  const limit = Math.max(1, Number(concurrency) || 1);
+  let cursor = 0;
+
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = cursor;
+      cursor += 1;
+      if (i >= items.length) return;
+      await worker(items[i], i);
+    }
+  });
+
+  await Promise.all(runners);
+}
+
+async function fetchImageBuffer(url, { cookie, timeoutMs, retries }) {
+  let lastErr = null;
+  for (let i = 0; i <= retries; i += 1) {
+    try {
+      return await fetchBuffer(url, {
+        ...(cookie ? { headers: { cookie } } : {}),
+        timeoutMs
+      });
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e?.message || e || '');
+      const retryable =
+        msg.includes('超时') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('EAI_AGAIN') ||
+        msg.includes('socket hang up');
+      if (!retryable || i === retries) break;
+      await new Promise((r) => setTimeout(r, 350 * (i + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 function parseFrontmatter(text) {
