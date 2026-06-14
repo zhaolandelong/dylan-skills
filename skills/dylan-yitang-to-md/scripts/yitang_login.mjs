@@ -13,6 +13,7 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     url: { type: "string" },
+    "qr-screenshot-wait-seconds": { type: "string" },
   },
 });
 
@@ -25,6 +26,10 @@ const skillRoot = path.resolve(scriptDir, "..");
 const storageStatePath = path.join(skillRoot, "storageState.json");
 const configPath = path.join(skillRoot, "config.json");
 const config = await readJsonFile(configPath);
+const qrScreenshotWaitMs = resolveQrScreenshotWaitMs(
+  values["qr-screenshot-wait-seconds"],
+  config?.qrScreenshotWaitSeconds,
+);
 
 const executablePath = await pickChromiumExecutablePath({
   configChromePath: config?.chromePath,
@@ -42,7 +47,14 @@ try {
   const qrTarget = await waitForQrReady(page);
 
   const screenshotPath = path.join(skillRoot, "login-qr.png");
-  await saveLoginQrScreenshot(page, screenshotPath, qrTarget);
+  if (qrScreenshotWaitMs > 0) {
+    console.error(
+      `二维码已就绪，等待 ${formatDuration(qrScreenshotWaitMs)} 后截图...`,
+    );
+  }
+  await saveLoginQrScreenshot(page, screenshotPath, qrTarget, {
+    waitMs: qrScreenshotWaitMs,
+  });
   console.error(`二维码图片: ${screenshotPath}`);
   const terminalQr =
     (await renderQrToTerminal(page, qrTarget)) ||
@@ -82,7 +94,8 @@ try {
   await browser.close();
 }
 
-async function saveLoginQrScreenshot(page, outPath, qrTarget) {
+async function saveLoginQrScreenshot(page, outPath, qrTarget, { waitMs = 0 } = {}) {
+  await waitBeforeQrScreenshot(page, waitMs);
   const handle = await pickBestQrLikeElement(page, qrTarget);
   if (handle) {
     try {
@@ -91,6 +104,12 @@ async function saveLoginQrScreenshot(page, outPath, qrTarget) {
     } catch {}
   }
   await page.screenshot({ path: outPath, fullPage: true });
+}
+
+async function waitBeforeQrScreenshot(page, waitMs) {
+  const delay = Math.max(0, Number(waitMs) || 0);
+  if (delay <= 0) return;
+  await page.waitForTimeout(delay);
 }
 
 async function saveStorageStateSilently(context, storageStatePath) {
@@ -314,4 +333,21 @@ async function verifyStorageState(storageStatePath, url, executablePath) {
     await context.close();
     await browser.close();
   }
+}
+
+function resolveQrScreenshotWaitMs(cliValue, configValue) {
+  const raw = cliValue ?? configValue;
+  if (raw == null || raw === "") return 10_000;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    throw new Error(`qrScreenshotWaitSeconds 配置无效: ${raw}`);
+  }
+  return Math.round(seconds * 1000);
+}
+
+function formatDuration(ms) {
+  const n = Number(ms) || 0;
+  if (n < 1000) return `${n}ms`;
+  const s = Math.round((n / 1000) * 10) / 10;
+  return `${s}s`;
 }

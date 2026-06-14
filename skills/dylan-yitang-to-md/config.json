@@ -2,6 +2,7 @@
   "outDir": "./test-docs",
   "cookie": "",
   "onConflict": "skip",
+  "qrScreenshotWaitSeconds": 10,
   "chromePath": {
     "linux": "",
     "mac": "",

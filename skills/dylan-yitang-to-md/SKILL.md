@@ -28,7 +28,8 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 ### 1) 登录一堂（扫码）
 
 - 脚本：`node skills/dylan-yitang-to-md/scripts/yitang_login.mjs`
-- 行为：打开 `https://sso.yitang.top/account/login/`，等待二维码就绪后截图；若二维码在主页面 DOM 中则直接截 `img.qrcode.lightBorder.js_qrcode_img`，若二维码在 `#login_container` 包裹的 iframe 中则优先截 iframe 内的 `img.qrcode`，拿不到时再回退到 `#login_container` / iframe 容器截图。截图保存到 `skills/dylan-yitang-to-md/login-qr.png`，同时输出完整绝对路径（stdout）；若二维码在主页面 DOM 中，还会尽量在终端渲染一个可扫码的字符二维码。会提示用户“仅有 2 分钟扫码时间”；扫码后把登录态写入 `skills/dylan-yitang-to-md/storageState.json`
+- `--qr-screenshot-wait-seconds <n>`（可选）：二维码就绪后，截图前额外等待 `n` 秒，默认 `10`
+- 行为：打开 `https://sso.yitang.top/account/login/`，等待二维码就绪后，先按 `qrScreenshotWaitSeconds`/`--qr-screenshot-wait-seconds` 额外等待（默认 10 秒）再截图；截图保存到 `skills/dylan-yitang-to-md/login-qr.png`，同时输出完整绝对路径（stdout）；若二维码在主页面 DOM 中，还会尽量在终端渲染一个可扫码的字符二维码。会提示用户“仅有 2 分钟扫码时间”；扫码后把登录态写入 `skills/dylan-yitang-to-md/storageState.json`
 
 ### 2) 收藏/下载文章（导出 Markdown）
 
@@ -38,6 +39,7 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 - `--cookie "<cookie>"`（可选）：从浏览器复制的 Cookie，用于免扫码登录（优先尝试）
 - `--on-conflict <mode>`（可选）：重名处理策略，支持 `skip` / `overwrite` / `rename`，默认 `skip`
 - `--overwrite` / `--rename`（可选）：`--on-conflict` 的快捷写法
+- `--qr-screenshot-wait-seconds <n>`（可选）：进入扫码流程后，二维码就绪到截图之间额外等待 `n` 秒，默认 `10`
 - `--headed`（可选）：调试用，非 headless 运行
 
 也可以通过 [config.json](./config.json) 提供默认值：
@@ -45,6 +47,7 @@ description: 当用户需要登录一堂(yitang.top)或把一堂文档(/fs-doc/.
 - `outDir`：输出目录（必填）
 - `cookie`：默认 Cookie（可选）
 - `onConflict`：重名处理策略，支持 `skip` / `overwrite` / `rename`，默认 `skip`
+- `qrScreenshotWaitSeconds`：二维码就绪后，截图前额外等待的秒数，默认 `10`
 - `chromePath`：Chrome/Chromium 可执行文件路径。支持直接写字符串，也支持按平台分别配置：
 
 ```json

@@ -1,19 +1,17 @@
 #!/usr/bin/env node
-import path from 'node:path';
 import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright-core';
 import { buildMarkdownDoc, htmlToMarkdown, isProbablyYitangDocUrl, normalizeContentHtml, pickOutDir } from './core.mjs';
-import { ensureDir, fileExists, parseCookieString, pickChromiumExecutablePath, readJsonFile, resolveMarkdownOutputTarget, writeMarkdownFile } from './io.mjs';
+import { fileExists, parseCookieString, pickChromiumExecutablePath, readJsonFile, resolveMarkdownOutputTarget, writeMarkdownFile } from './io.mjs';
 
 const DEFAULT_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
 const DEFAULT_ACCEPT =
   'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
 const DEFAULT_ACCEPT_LANGUAGE = 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7';
-const QR_SCAN_TIMEOUT_MS = 2 * 60 * 1000;
-
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
@@ -92,18 +90,10 @@ async function main() {
     await settleNavigation(page);
 
     if (await isLoginPage(page)) {
-      const loginShot = path.join(os.tmpdir(), `yitang-login-page-${Date.now()}.png`);
-      await page.screenshot({ path: loginShot, fullPage: true }).catch(() => {});
-      console.error(`疑似登录页截图: ${loginShot}`);
-      if (cookie) {
-        console.error('Cookie 可能无效或已失效，开始进入扫码登录流程');
-      }
-      await ensureLoggedInByQr({
-        page,
-        context,
-        storageStatePath
-      });
-      await settleNavigation(page);
+      const loginHint = cookie
+        ? '当前 Cookie 可能无效或已失效，请先重新登录。'
+        : '当前未检测到可用登录态，请先登录。';
+      throw new Error(`${loginHint} 请先运行 \`node skills/dylan-yitang-to-md/scripts/yitang_login.mjs\` 更新登录态后再重试。`);
     }
 
     await waitForContentReady(page, 120000);
@@ -169,8 +159,6 @@ async function main() {
     if (downloadImages) {
       console.error('已移除图片下载功能；如需下载图片并改写链接，请使用 dylan-download-md-img');
     }
-
-    await saveStorageStateSilently(context, storageStatePath);
     const totalMs = Date.now() - startedAt;
     console.error(`下载完成: ${path.basename(outputPath)} 用时 ${formatDuration(totalMs)}`);
     process.stdout.write(`${outputPath}\n`);
@@ -244,129 +232,6 @@ async function isLoginPage(page) {
   } catch {
     return false;
   }
-}
-
-async function ensureLoggedInByQr({ page, context, storageStatePath }) {
-  page.setDefaultTimeout(QR_SCAN_TIMEOUT_MS);
-  const screenshotPath = path.join(os.tmpdir(), `yitang-login-${Date.now()}.png`);
-  await saveLoginQrScreenshot(page, screenshotPath);
-  console.error(`请在 2 分钟内扫码登录: ${screenshotPath}`);
-
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < QR_SCAN_TIMEOUT_MS) {
-    const ok = await safeEvaluate(page, () => {
-      const u = location.href;
-      if (u.includes('/fs-doc/')) return true;
-
-      const s = (document.body?.innerText || '').trim();
-      const isLoginLike = s.includes('微信登录') || (document.title || '').includes('登录') || u.includes('/login');
-      if (!isLoginLike) return true;
-
-      const mainCandidates = [
-        document.querySelector('.page-block-children'),
-        document.querySelector('.page-main'),
-        document.querySelector('article'),
-        document.querySelector('main'),
-        document.querySelector('[role="main"]')
-      ].filter(Boolean);
-      const maxLen = Math.max(0, ...mainCandidates.map((el) => (el?.innerText || '').trim().length));
-      return maxLen > 1000;
-    });
-    if (ok) break;
-
-    const refreshed = await tryRefreshQr(page);
-    if (refreshed) {
-      await page.waitForTimeout(800);
-      await saveLoginQrScreenshot(page, screenshotPath).catch(() => {});
-    }
-
-    await page.waitForTimeout(800);
-  }
-
-  if (await isLoginPage(page)) {
-    throw new Error('扫码登录超时（二维码可能已过期或未完成登录）');
-  }
-
-  await page.waitForLoadState('domcontentloaded');
-
-  await saveStorageStateSilently(context, storageStatePath);
-}
-
-async function tryRefreshQr(page) {
-  return await safeEvaluate(page, () => {
-    const text = (document.body?.innerText || '').trim();
-    const looksExpired = text.includes('已失效') || text.includes('过期') || text.includes('刷新') || text.includes('重新获取');
-    if (!looksExpired) return false;
-
-    const candidates = Array.from(document.querySelectorAll('button,a,div,span')).filter((el) => {
-      const t = (el?.innerText || '').trim();
-      if (!t) return false;
-      return t.includes('刷新') || t.includes('重新获取') || t.includes('重新加载') || t.includes('点击重试');
-    });
-    for (const el of candidates) {
-      const rect = el.getBoundingClientRect?.();
-      if (!rect || rect.width <= 0 || rect.height <= 0) continue;
-      try {
-        el.click();
-        return true;
-      } catch {}
-    }
-
-    try {
-      location.reload();
-      return true;
-    } catch {
-      return false;
-    }
-  });
-}
-
-async function saveLoginQrScreenshot(page, outPath) {
-  const handle = await pickBestQrLikeElement(page);
-  if (handle) {
-    try {
-      await handle.screenshot({ path: outPath });
-      return;
-    } catch {}
-  }
-
-  await page.screenshot({ path: outPath, fullPage: true });
-}
-
-async function saveStorageStateSilently(context, storageStatePath) {
-  const p = String(storageStatePath || '').trim();
-  if (!p) return;
-  try {
-    await ensureDir(path.dirname(p));
-    await context.storageState({ path: p });
-  } catch (e) {
-    const msg = String(e?.message || e || '');
-    console.error(`保存登录态失败: ${msg}`);
-  }
-}
-
-async function pickBestQrLikeElement(page) {
-  const handles = await page.$$('canvas, img');
-  if (!handles.length) return null;
-
-  const scored = [];
-  for (const h of handles) {
-    try {
-      const box = await h.boundingBox();
-      if (!box) continue;
-      const w = box.width;
-      const hgt = box.height;
-      const minSide = Math.min(w, hgt);
-      const maxSide = Math.max(w, hgt);
-      if (minSide < 140) continue;
-      if (maxSide / minSide > 1.15) continue;
-      const area = w * hgt;
-      scored.push({ handle: h, score: area });
-    } catch {}
-  }
-
-  scored.sort((a, b) => b.score - a.score);
-  return scored[0]?.handle || null;
 }
 
 async function loadFullDocument(page, { warmupImages = true } = {}) {
