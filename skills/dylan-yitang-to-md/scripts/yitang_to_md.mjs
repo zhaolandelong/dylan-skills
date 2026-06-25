@@ -1,10 +1,13 @@
 #!/usr/bin/env node
+import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile as execFileCb } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { promisify } from 'node:util';
 import { chromium } from 'playwright-core';
-import { buildMarkdownDoc, htmlToMarkdown, isProbablyYitangDocUrl, normalizeContentHtml, pickOutDir } from './core.mjs';
+import { buildCookieHeaderFromList, buildMarkdownDoc, extractTitleTagContent, htmlToMarkdown, isFeishuDocxUrl, isProbablyYitangDocUrl, normalizeContentHtml, pickOutDir } from './core.mjs';
 import { fileExists, parseCookieString, pickChromiumExecutablePath, readJsonFile, resolveMarkdownOutputTarget, writeMarkdownFile } from './io.mjs';
 
 const DEFAULT_UA =
@@ -12,6 +15,7 @@ const DEFAULT_UA =
 const DEFAULT_ACCEPT =
   'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
 const DEFAULT_ACCEPT_LANGUAGE = 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7';
+const execFile = promisify(execFileCb);
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
@@ -20,6 +24,8 @@ const { values, positionals } = parseArgs({
     'download-images': { type: 'boolean' },
     'no-download-images': { type: 'boolean' },
     headed: { type: 'boolean' },
+    'embed-image-cookie': { type: 'boolean' },
+    'no-embed-image-cookie': { type: 'boolean' },
     'on-conflict': { type: 'string' },
     overwrite: { type: 'boolean' },
     rename: { type: 'boolean' }
@@ -33,7 +39,7 @@ if (!url) {
 }
 
 if (!isProbablyYitangDocUrl(url)) {
-  console.error('URL 不是一堂文档链接(yitang.top/fs-doc/...)');
+  console.error('URL 不是支持的文档链接，当前支持: yitang.top/fs-doc/... 或 yitanger.feishu.cn/docx/...');
   process.exit(1);
 }
 
@@ -63,6 +69,11 @@ const onConflict = resolveOnConflict({
 
 const headed = values.headed ?? false;
 const headless = !headed;
+const embedImageCookie = resolveEmbedImageCookie({
+  cliOn: values['embed-image-cookie'],
+  cliOff: values['no-embed-image-cookie'],
+  configValue: config?.embedImageCookie
+});
 
 const fetchedAt = new Date().toISOString();
 
@@ -96,11 +107,42 @@ async function main() {
       throw new Error(`${loginHint} 请先运行 \`node skills/dylan-yitang-to-md/scripts/yitang_login.mjs\` 更新登录态后再重试。`);
     }
 
-    await waitForContentReady(page, 120000);
+    const useLarkCliForContent = isFeishuDocxUrl(url);
+    let title = '';
+    let contentMd = '';
 
-    const header = await extractPageHeader(page);
-    const pageTitle = (await page.title()).trim();
-    const title = pageTitle || header?.title || 'yitang-doc';
+    if (useLarkCliForContent) {
+      console.error('正文抓取: lark-cli');
+      const fetched = await fetchFeishuMarkdownViaLarkCli({
+        url,
+        configLarkCliPath: config?.larkCliPath,
+        homeDir
+      });
+      title = fetched.title || (await page.title()).trim() || 'feishu-doc';
+      contentMd = fetched.contentMarkdown;
+    } else {
+      console.error('正文抓取: browser');
+      await waitForContentReady(page, 120000);
+
+      const header = await extractPageHeader(page);
+      const pageTitle = (await page.title()).trim();
+      title = pageTitle || header?.title || 'yitang-doc';
+
+      const headerHtml = buildDocHeaderHtml({ title, lines: header?.lines || [] });
+      console.error('抓取正文...');
+      const { html: collectedHtml } = await runWithRetry(
+        async () => await collectContentHtml(page, { warmupImages: downloadImages }),
+        {
+          retries: 3,
+          shouldRetry: isExecutionContextDestroyedError
+        }
+      );
+
+      const rawMain = [headerHtml, collectedHtml].filter(Boolean).join('\n');
+      const contentHtml = normalizeContentHtml(rawMain);
+      contentMd = htmlToMarkdown(contentHtml);
+    }
+
     console.error(`解析标题: ${title}`);
 
     const outDir = pickOutDir({
@@ -121,25 +163,14 @@ async function main() {
       return;
     }
 
-    console.error('抓取正文...');
-    const { html: collectedHtml } = await runWithRetry(
-      async () => await collectContentHtml(page, { warmupImages: downloadImages }),
-      {
-        retries: 3,
-        shouldRetry: isExecutionContextDestroyedError
-      }
-    );
-
-    const headerHtml = buildDocHeaderHtml({ title, lines: header?.lines || [] });
-    const rawMain = [headerHtml, collectedHtml].filter(Boolean).join('\n');
-    const contentHtml = normalizeContentHtml(rawMain);
-    const contentMd = htmlToMarkdown(contentHtml);
+    const embeddedDownloadCookie = embedImageCookie ? await buildEmbeddedDownloadCookie(context, url) : '';
 
     const doc = buildMarkdownDoc({
       title,
       sourceUrl: url,
       fetchedAt,
-      contentMarkdown: contentMd
+      contentMarkdown: contentMd,
+      embeddedDownloadCookie
     });
 
     const output = await writeMarkdownFile({
@@ -200,6 +231,13 @@ function resolveDownloadImages({ cliOn, cliOff, configValue }) {
   return false;
 }
 
+function resolveEmbedImageCookie({ cliOn, cliOff, configValue }) {
+  if (cliOff === true) return false;
+  if (cliOn === true) return true;
+  if (typeof configValue === 'boolean') return configValue;
+  return true;
+}
+
 function resolveOnConflict({ cliValue, overwrite, rename, configValue }) {
   if (overwrite === true) return 'overwrite';
   if (rename === true) return 'rename';
@@ -232,6 +270,84 @@ async function isLoginPage(page) {
   } catch {
     return false;
   }
+}
+
+async function buildEmbeddedDownloadCookie(context, url) {
+  const cookies = await context.cookies([
+    url,
+    'https://internal-api-drive-stream.feishu.cn/',
+    'https://feishu.cn/'
+  ]);
+  return buildCookieHeaderFromList(cookies);
+}
+
+async function fetchFeishuMarkdownViaLarkCli({ url, configLarkCliPath, homeDir }) {
+  const cliPath = await pickLarkCliExecutablePath({ configLarkCliPath, homeDir });
+  try {
+    const { stdout } = await execFile(
+      cliPath,
+      ['docs', '+fetch', '--api-version', 'v2', '--doc', url, '--doc-format', 'markdown', '--format', 'json'],
+      {
+        env: process.env,
+        maxBuffer: 50 * 1024 * 1024
+      }
+    );
+    const payload = JSON.parse(String(stdout || ''));
+    const contentMarkdown = String(payload?.data?.document?.content || '');
+    if (!contentMarkdown.trim()) {
+      throw new Error('lark-cli 返回的 Markdown 为空');
+    }
+    return {
+      title: extractTitleTagContent(contentMarkdown),
+      contentMarkdown
+    };
+  } catch (error) {
+    const message = String(error?.stderr || error?.stdout || error?.message || error);
+    throw new Error(`lark-cli 抓取 Feishu 文档失败: ${message.trim()}`);
+  }
+}
+
+async function pickLarkCliExecutablePath({ configLarkCliPath, homeDir }) {
+  const configured = String(configLarkCliPath || process.env.LARK_CLI_PATH || '').trim();
+  if (configured) return configured;
+
+  const nvmCli = await findLatestNvmLarkCli(homeDir);
+  if (nvmCli) return nvmCli;
+
+  return 'lark-cli';
+}
+
+async function findLatestNvmLarkCli(homeDir) {
+  const versionsDir = path.join(homeDir, '.nvm', 'versions', 'node');
+  if (!(await fileExists(versionsDir))) return '';
+
+  try {
+    const entries = await fs.readdir(versionsDir, { withFileTypes: true });
+    const candidates = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const binPath = path.join(versionsDir, entry.name, 'bin', 'lark-cli');
+      if (!(await fileExists(binPath))) continue;
+      candidates.push({ version: entry.name, binPath });
+    }
+
+    candidates.sort((a, b) => compareNodeVersionDesc(a.version, b.version));
+    return candidates[0]?.binPath || '';
+  } catch {
+    return '';
+  }
+}
+
+function compareNodeVersionDesc(a, b) {
+  const pa = String(a || '').replace(/^v/i, '').split('.').map((x) => Number.parseInt(x, 10) || 0);
+  const pb = String(b || '').replace(/^v/i, '').split('.').map((x) => Number.parseInt(x, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i += 1) {
+    const av = pa[i] || 0;
+    const bv = pb[i] || 0;
+    if (av !== bv) return bv - av;
+  }
+  return 0;
 }
 
 async function loadFullDocument(page, { warmupImages = true } = {}) {

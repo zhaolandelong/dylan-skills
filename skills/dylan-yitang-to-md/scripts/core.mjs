@@ -6,10 +6,37 @@ import crypto from 'node:crypto';
 export function isProbablyYitangDocUrl(input) {
   try {
     const u = new URL(input);
-    return u.hostname === 'yitang.top' && u.pathname.startsWith('/fs-doc/');
+    const hostname = String(u.hostname || '').toLowerCase();
+    const pathname = String(u.pathname || '');
+
+    if ((hostname === 'yitang.top' || hostname.endsWith('.yitang.top')) && pathname.startsWith('/fs-doc/')) {
+      return true;
+    }
+
+    if (hostname === 'yitanger.feishu.cn' && /^\/docx\/[A-Za-z0-9]+(?:\/|$)/.test(pathname)) {
+      return true;
+    }
+
+    return false;
   } catch {
     return false;
   }
+}
+
+export function isFeishuDocxUrl(input) {
+  try {
+    const u = new URL(input);
+    const hostname = String(u.hostname || '').toLowerCase();
+    const pathname = String(u.pathname || '');
+    return hostname === 'yitanger.feishu.cn' && /^\/docx\/[A-Za-z0-9]+(?:\/|$)/.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
+export function extractTitleTagContent(text) {
+  const match = String(text || '').match(/<title>([\s\S]*?)<\/title>/i);
+  return String(match?.[1] || '').trim();
 }
 
 export function normalizeContentHtml(contentHtml) {
@@ -358,8 +385,32 @@ export function buildFrontmatter({ title, sourceUrl, fetchedAt }) {
   );
 }
 
-export function buildMarkdownDoc({ title, sourceUrl, fetchedAt, contentMarkdown }) {
-  return buildFrontmatter({ title, sourceUrl, fetchedAt }) + ensureTrailingNewline(String(contentMarkdown || ''));
+export function buildCookieHeaderFromList(cookies) {
+  const pairs = [];
+  const seen = new Set();
+
+  for (const cookie of cookies || []) {
+    const name = String(cookie?.name || '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    pairs.push(`${name}=${String(cookie?.value || '')}`);
+  }
+
+  return pairs.join('; ');
+}
+
+export function buildEmbeddedDownloadCookieComment(cookieHeader) {
+  const value = String(cookieHeader || '').trim();
+  if (!value) return '';
+  return `<!-- dylan-download-md-img-cookie: ${Buffer.from(value).toString('base64url')} -->`;
+}
+
+export function buildMarkdownDoc({ title, sourceUrl, fetchedAt, contentMarkdown, embeddedDownloadCookie = '' }) {
+  const frontmatter = buildFrontmatter({ title, sourceUrl, fetchedAt });
+  const cookieComment = buildEmbeddedDownloadCookieComment(embeddedDownloadCookie);
+  const body = ensureTrailingNewline(String(contentMarkdown || ''));
+  if (!cookieComment) return frontmatter + body;
+  return `${frontmatter}${cookieComment}\n\n${body}`;
 }
 
 export function ensureTrailingNewline(s) {

@@ -1,6 +1,8 @@
 {
   "outDir": "./test-docs",
   "cookie": "",
+  "embedImageCookie": true,
+  "larkCliPath": "",
   "onConflict": "skip",
   "qrScreenshotWaitSeconds": 10,
   "chromePath": {

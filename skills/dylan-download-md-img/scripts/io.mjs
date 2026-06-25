@@ -8,8 +8,14 @@ const gunzip = promisify(zlib.gunzip);
 const inflate = promisify(zlib.inflate);
 
 const defaultHeaders = {
-  accept: '*/*',
+  accept:
+    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
   'accept-encoding': 'gzip,deflate',
+  'accept-language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+  'cache-control': 'no-cache',
+  pragma: 'no-cache',
+  priority: 'u=0, i',
+  'upgrade-insecure-requests': '1',
   'user-agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
 };
@@ -76,7 +82,10 @@ export async function fetchBuffer(
           }
 
           if (status < 200 || status >= 300) {
-            done(new Error(`请求失败: ${status}`));
+            const buf = await readAll(res, Math.min(maxBytes, 8192));
+            const contentType = String(res.headers['content-type'] || '');
+            const snippet = pickErrorSnippet(buf, contentType);
+            done(new Error(`请求失败: ${status}${snippet ? ` ${snippet}` : ''}`));
             return;
           }
 
@@ -120,4 +129,28 @@ async function decodeBody(buf, encoding) {
   if (encoding.includes('gzip')) return await gunzip(buf);
   if (encoding.includes('deflate')) return await inflate(buf);
   return buf;
+}
+
+async function readAll(stream, maxBytes = Infinity) {
+  const chunks = [];
+  let total = 0;
+  for await (const c of stream) {
+    total += c.length || 0;
+    if (total > maxBytes) {
+      chunks.push(c.subarray(0, Math.max(0, maxBytes - (total - c.length))));
+      break;
+    }
+    chunks.push(c);
+  }
+  return Buffer.concat(chunks);
+}
+
+function pickErrorSnippet(buf, contentType) {
+  const ct = String(contentType || '').toLowerCase();
+  if (!ct.includes('text') && !ct.includes('json') && !ct.includes('html')) return '';
+  return Buffer.from(buf || [])
+    .toString('utf8')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180);
 }

@@ -33,7 +33,7 @@ const skillRoot = path.resolve(scriptDir, '..');
 const configPath = path.join(skillRoot, 'config.json');
 const config = await readJsonFile(configPath);
 
-const cookie = values.cookie || '';
+const cookie = values.cookie || String(config?.cookie || '');
 const configConcurrency = Number.parseInt(String(config?.concurrency ?? ''), 10);
 const cliConcurrency = Number.parseInt(String(values.concurrency || ''), 10);
 const concurrency = Math.max(1, Number.isFinite(cliConcurrency) ? cliConcurrency : Number.isFinite(configConcurrency) ? configConcurrency : 10);
@@ -41,7 +41,8 @@ const onConflict = normalizeConflictPolicy(values['on-conflict'] || config?.onCo
 const log = (message) => process.stderr.write(`[download-md-img] ${message}\n`);
 
 log(`Markdown: ${absPath}`);
-if (cookie) log('Cookie: 已提供');
+if (cookie) log('Cookie: 已显式提供');
+else log('Cookie: 未显式提供，将尝试从 Markdown 头部注释读取');
 log(`并发: ${concurrency}`);
 log(`重名策略: ${onConflict}`);
 

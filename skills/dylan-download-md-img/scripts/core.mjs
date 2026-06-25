@@ -20,6 +20,16 @@ export function extractMarkdownImageUrls(markdown) {
   return list;
 }
 
+export function extractEmbeddedDownloadCookie(markdown) {
+  const match = String(markdown || '').match(/<!--\s*dylan-download-md-img-cookie:\s*([A-Za-z0-9_-]+)\s*-->/i);
+  if (!match?.[1]) return '';
+  try {
+    return Buffer.from(match[1], 'base64url').toString('utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
 export function buildMarkdownId(seed) {
   const s = String(seed || '').trim() || String(Date.now());
   const hash = crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
@@ -57,6 +67,9 @@ export async function downloadImagesAndRewriteMarkdown({
   const imageDir = path.join(mdDir, articleId);
 
   const raw = await fs.readFile(absPath, 'utf8');
+  const embeddedCookie = extractEmbeddedDownloadCookie(raw);
+  const effectiveCookie = embeddedCookie || cookie;
+  const sourceUrl = String(parseFrontmatter(raw)?.meta?.source_url || '').trim();
   const urls = extractMarkdownImageUrls(raw);
   if (!urls.length) {
     log('未发现图片链接');
@@ -65,6 +78,7 @@ export async function downloadImagesAndRewriteMarkdown({
 
   await ensureDir(imageDir);
 
+  if (embeddedCookie) log('Cookie: 已从 Markdown 头部注释读取');
   log(`下载图片: ${urls.length} 张 -> ${imageDir}`);
   const urlToLocal = new Map();
 
@@ -76,7 +90,8 @@ export async function downloadImagesAndRewriteMarkdown({
       log(`(${index}/${urls.length}) ${imageUrl}`);
       try {
         const { buffer, contentType } = await fetchImageBuffer(imageUrl, {
-          cookie,
+          cookie: effectiveCookie,
+          referer: sourceUrl,
           timeoutMs: 30_000,
           retries: 2
         });
@@ -137,12 +152,15 @@ async function runWithConcurrency(items, concurrency, worker) {
   await Promise.all(runners);
 }
 
-async function fetchImageBuffer(url, { cookie, timeoutMs, retries }) {
+async function fetchImageBuffer(url, { cookie, referer, timeoutMs, retries }) {
   let lastErr = null;
   for (let i = 0; i <= retries; i += 1) {
     try {
+      const headers = {};
+      if (cookie) headers.cookie = cookie;
+      if (referer) headers.referer = referer;
       return await fetchBuffer(url, {
-        ...(cookie ? { headers: { cookie } } : {}),
+        headers,
         timeoutMs
       });
     } catch (e) {

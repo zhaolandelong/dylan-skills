@@ -1,11 +1,12 @@
 {
   "name": "dylan-yitang-to-md",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "bin": {
     "dylan-yitang-to-md": "./scripts/yitang_to_md.mjs",
-    "dylan-yitang-login": "./scripts/yitang_login.mjs"
+    "dylan-yitang-login": "./scripts/yitang_login.mjs",
+    "dylan-yitang-postprocess-md": "./scripts/yitang_postprocess_md.mjs"
   },
   "dependencies": {
     "cheerio": "1.0.0-rc.12",
