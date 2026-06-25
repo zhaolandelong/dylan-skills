@@ -4,7 +4,6 @@ import path from 'node:path';
 import {
   extractWechatArticle,
   htmlToMarkdown,
-  slugify,
   getCandidateFilenames,
   filenameBaseFromTitle,
   looksLikeWechatBlockedPage,
@@ -38,11 +37,6 @@ test('htmlToMarkdown keeps image url', () => {
   const md = htmlToMarkdown('<p>第一段</p><img src="https://example.com/a.png" />');
   assert.match(md, /第一段/);
   assert.match(md, /!\[[^\]]*\]\(https:\/\/example\.com\/a\.png\)/);
-});
-
-test('slugify produces stable filename base', () => {
-  assert.equal(slugify('Hello World'), 'hello-world');
-  assert.equal(slugify('  '), 'wechat-article');
 });
 
 test('getCandidateFilenames keeps title as base', () => {

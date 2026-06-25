@@ -252,17 +252,6 @@ export function parseCookieString(cookie, baseUrlOrUrls) {
   return list;
 }
 
-export function buildCookieHeader(cookies) {
-  const parts = [];
-  for (const c of cookies || []) {
-    const name = String(c?.name || '').trim();
-    const value = String(c?.value || '');
-    if (!name) continue;
-    parts.push(`${name}=${value}`);
-  }
-  return parts.join('; ');
-}
-
 async function readAll(stream) {
   const chunks = [];
   for await (const c of stream) chunks.push(c);

@@ -110,18 +110,6 @@ export function htmlToMarkdown(html) {
   return ensureTrailingNewline(md);
 }
 
-export function slugify(input) {
-  const s = String(input || '')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .replace(/-+/g, '-');
-
-  return s || 'wechat-article';
-}
-
 export function filenameBaseFromTitle(title) {
   const raw = String(title || '').normalize('NFC');
   const cleaned = raw
