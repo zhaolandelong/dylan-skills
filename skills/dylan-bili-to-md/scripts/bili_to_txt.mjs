@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import {
   buildMarkdownDoc,
@@ -14,111 +15,154 @@ import {
   pickPreferredSubtitle,
   subtitleBodyToPlainText,
 } from "./core.mjs";
+import { transcribeAudioWithOpenAICompatible } from "./asr.mjs";
+import { resolveAsrOptions } from "./audio_to_md.mjs";
+import { downloadBilibiliAudio } from "./bili_download_audio.mjs";
 import { fetchJson, readJsonFile, resolveFinalUrl, writeTextFile } from "./io.mjs";
 
-const { values, positionals } = parseArgs({
-  allowPositionals: true,
-  options: {
-    out: { type: "string" },
-    cookie: { type: "string" },
-  },
-});
+export async function main(argv = process.argv.slice(2)) {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      out: { type: "string" },
+      cookie: { type: "string" },
+      "prefer-asr": { type: "boolean" },
+      "base-url": { type: "string" },
+      "api-key": { type: "string" },
+      model: { type: "string" },
+      lang: { type: "string" },
+      prompt: { type: "string" },
+      timeout: { type: "string" },
+    },
+  });
 
-const inputUrl = positionals[0];
-if (!inputUrl) {
-  console.error("缺少 URL 参数");
-  process.exit(1);
+  const inputUrl = positionals[0];
+  if (!inputUrl) {
+    throw new Error("缺少 URL 参数");
+  }
+
+  if (!isProbablyBilibiliVideoUrl(inputUrl)) {
+    throw new Error("URL 不是 B 站视频链接(bilibili.com/video/BV... 或 b23.tv/...)");
+  }
+
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const skillRoot = path.resolve(scriptDir, "..");
+  const configPath = path.join(skillRoot, "config.json");
+
+  const cwd = process.cwd();
+  const homeDir = os.homedir();
+
+  const config = await readJsonFile(configPath);
+  const outDir = pickOutDir({
+    cliOutDir: values.out,
+    configOutDir: config?.outDir,
+    cwd,
+    homeDir,
+  });
+
+  if (!outDir) {
+    throw new Error("缺少输出目录：请传 --out 或在 config.json 中设置 outDir");
+  }
+
+  const cookie = values.cookie || config?.cookie || "";
+  if (cookie) log("Cookie: 已提供");
+  const fetchedAt = new Date().toISOString();
+  const asrOptions = resolveAsrOptions({ cliValues: values, configAsr: config?.asr });
+
+  const normalizedUrl = await normalizeUrl(inputUrl, cookie);
+  const { bvid, aid, p } = parseBilibiliVideoUrl(normalizedUrl);
+
+  if (!bvid && !aid) {
+    throw new Error("未能从 URL 解析出 BV 号/av 号");
+  }
+
+  log("获取视频信息...");
+  const view = await fetchJson(buildViewApiUrl({ bvid, aid }), {
+    headers: cookie ? { cookie } : {},
+  });
+
+  if (view?.code !== 0 || !view?.data) {
+    throw new Error(`获取视频信息失败: ${safeJson(view)}`);
+  }
+
+  const title = String(view.data.title || "").trim() || "bilibili-video";
+  const pages = Array.isArray(view.data.pages) ? view.data.pages : [];
+  const page = pages.find((x) => Number(x?.page) === p) || pages[0];
+  if (!page?.cid) {
+    throw new Error("未找到 cid（可能是链接无效或视频结构异常）");
+  }
+
+  const cid = Number(page.cid);
+
+  const subtitleState = await getSubtitles({
+    aid: Number(view.data.aid || aid),
+    bvid,
+    cid,
+    cookie,
+  });
+
+  const picked = pickPreferredSubtitle(subtitleState.subtitles);
+  const contentMode = pickBiliContentMode({
+    pickedSubtitle: picked,
+    asrBaseUrl: asrOptions.baseUrl,
+    preferAsr: values["prefer-asr"],
+  });
+  if (contentMode === "subtitle") {
+    log(`下载字幕: ${picked.lang} (${picked.source})...`);
+    const subtitleJson = await fetchJson(picked.url, {
+      headers: cookie ? { cookie } : {},
+    });
+
+    const text = subtitleBodyToPlainText(subtitleJson?.body);
+    if (!text.trim()) {
+      throw new Error("字幕内容为空");
+    }
+
+    const markdown = buildMarkdownDoc({
+      title,
+      sourceUrl: normalizedUrl,
+      fetchedAt,
+      contentMarkdown: text,
+    });
+    const filename = buildOutputFilename({ title, p, lang: picked.lang });
+    const outputPath = await writeTextFile({ outDir, filename, text: markdown });
+
+    writeResult(outputPath, bvid || String(aid), cid, picked.lang, picked.source);
+    return;
+  }
+
+  if (contentMode === "asr") {
+    const output = await transcribeFromAudioFallback({
+      inputUrl: normalizedUrl,
+      title,
+      bvid: bvid || String(aid),
+      cid,
+      p,
+      cookie,
+      outDir,
+      fetchedAt,
+      asrOptions,
+    });
+    writeResult(output.path, bvid || String(aid), cid, output.lang, "asr");
+    return;
+  }
+
+  throw new Error(subtitleState.reason);
 }
 
-if (!isProbablyBilibiliVideoUrl(inputUrl)) {
-  console.error("URL 不是 B 站视频链接(bilibili.com/video/BV... 或 b23.tv/...)");
-  process.exit(1);
+function isMainModule() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  return pathToFileURL(path.resolve(entry)).href === import.meta.url;
 }
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const skillRoot = path.resolve(scriptDir, "..");
-const configPath = path.join(skillRoot, "config.json");
-
-const cwd = process.cwd();
-const homeDir = os.homedir();
-
-const config = await readJsonFile(configPath);
-const outDir = pickOutDir({
-  cliOutDir: values.out,
-  configOutDir: config?.outDir,
-  cwd,
-  homeDir,
-});
-
-if (!outDir) {
-  console.error("缺少输出目录：请传 --out 或在 config.json 中设置 outDir");
-  process.exit(1);
+if (isMainModule()) {
+  await main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
 }
-
-const cookie = values.cookie || config?.cookie || "";
-if (cookie) log("Cookie: 已提供");
-const fetchedAt = new Date().toISOString();
-
-const normalizedUrl = await normalizeUrl(inputUrl, cookie);
-const { bvid, aid, p } = parseBilibiliVideoUrl(normalizedUrl);
-
-if (!bvid && !aid) {
-  console.error("未能从 URL 解析出 BV 号/av 号");
-  process.exit(1);
-}
-
-log("获取视频信息...");
-const view = await fetchJson(buildViewApiUrl({ bvid, aid }), {
-  headers: cookie ? { cookie } : {},
-});
-
-if (view?.code !== 0 || !view?.data) {
-  throw new Error(`获取视频信息失败: ${safeJson(view)}`);
-}
-
-const title = String(view.data.title || "").trim() || "bilibili-video";
-const pages = Array.isArray(view.data.pages) ? view.data.pages : [];
-const page = pages.find((x) => Number(x?.page) === p) || pages[0];
-if (!page?.cid) {
-  throw new Error("未找到 cid（可能是链接无效或视频结构异常）");
-}
-
-const cid = Number(page.cid);
-
-const { subtitles, needLoginSubtitle } = await getSubtitles({
-  aid: Number(view.data.aid || aid),
-  bvid,
-  cid,
-  cookie,
-});
-
-const picked = pickPreferredSubtitle(subtitles);
-if (!picked || !picked.url) {
-  throw new Error(
-    `字幕选择失败（字幕条目存在但缺少可下载地址）。摘要: ${summarizeSubtitles(subtitles)}`,
-  );
-}
-
-log(`下载字幕: ${picked.lang} (${picked.source})...`);
-const subtitleJson = await fetchJson(picked.url, {
-  headers: cookie ? { cookie } : {},
-});
-
-const text = subtitleBodyToPlainText(subtitleJson?.body);
-if (!text.trim()) {
-  throw new Error("字幕内容为空");
-}
-
-const markdown = buildMarkdownDoc({
-  title,
-  sourceUrl: normalizedUrl,
-  fetchedAt,
-  contentMarkdown: text,
-});
-const filename = buildOutputFilename({ title, p, lang: picked.lang });
-const outputPath = await writeTextFile({ outDir, filename, text: markdown });
-
-writeResult(outputPath, bvid || String(aid), cid, picked.lang, picked.source);
 
 async function normalizeUrl(url, cookie) {
   const u = new URL(url);
@@ -199,14 +243,21 @@ async function getSubtitles({ aid, bvid, cid, cookie }) {
       log(`wbi 接口失败: ${wbi.error}`);
     }
     if (needLoginSubtitle && !cookie) {
-      throw new Error("该视频字幕需要登录态，请通过 --cookie 或 config.json.cookie 提供 Cookie");
+      return {
+        subtitles: [],
+        needLoginSubtitle,
+        reason: "该视频字幕需要登录态，请通过 --cookie 或 config.json.cookie 提供 Cookie；若已配置 ASR，也可自动走音频转写",
+      };
     }
-    throw new Error(
-      "未找到可用字幕（可能无字幕，或 Cookie 失效/权限不足）。可先手动下载音频，再用 dylan-bili-audio-to-md 转写"
-    );
+    return {
+      subtitles: [],
+      needLoginSubtitle,
+      reason:
+        "未找到可用字幕（可能无字幕，或 Cookie 失效/权限不足）。当前可自动走音频下载 + ASR 转写；若未配置 ASR，可先手动下载音频，再用 dylan-bili-audio-to-md 转写",
+    };
   }
 
-  return { subtitles, needLoginSubtitle };
+  return { subtitles, needLoginSubtitle, reason: "" };
 }
 
 async function tryFetchWbiSubtitles({ aid, cid, cookie }) {
@@ -242,15 +293,59 @@ async function tryFetchWbiSubtitles({ aid, cid, cookie }) {
   }
 }
 
-function summarizeSubtitles(subtitles) {
-  const list = Array.isArray(subtitles) ? subtitles : [];
-  const brief = list.slice(0, 6).map((s) => {
-    const lan = String(s?.lan || '').trim() || 'unknown';
-    const t = s?.subtitle_type ?? s?.type ?? null;
-    const hasUrl = Boolean(String(s?.url || '').trim());
-    const hasSubtitleUrl = Boolean(String(s?.subtitle_url || '').trim());
-    const isLock = Boolean(s?.is_lock);
-    return { lan, type: t, hasUrl, hasSubtitleUrl, isLock };
-  });
-  return JSON.stringify({ total: list.length, items: brief });
+export function pickBiliContentMode({ pickedSubtitle, asrBaseUrl, preferAsr = false }) {
+  if (preferAsr && String(asrBaseUrl || "").trim()) return "asr";
+  if (pickedSubtitle?.url) return "subtitle";
+  return String(asrBaseUrl || "").trim() ? "asr" : "none";
+}
+
+async function transcribeFromAudioFallback({
+  inputUrl,
+  title,
+  bvid,
+  cid,
+  p,
+  cookie,
+  outDir,
+  fetchedAt,
+  asrOptions,
+}) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dylan-bili-asr-"));
+  try {
+    log("未命中可用字幕，回退到音频下载 + ASR...");
+    const audioResult = await downloadBilibiliAudio({
+      inputUrl,
+      outDir: tempDir,
+      cookie,
+      logger: (message) => log(`audio: ${message}`),
+    });
+    const asrResult = await transcribeAudioWithOpenAICompatible({
+      filePath: audioResult.path,
+      baseUrl: asrOptions.baseUrl,
+      apiKey: asrOptions.apiKey,
+      model: asrOptions.model,
+      language: asrOptions.language,
+      prompt: asrOptions.prompt,
+      timeoutMs: asrOptions.timeoutMs,
+    });
+    const lang = String(asrResult.language || asrOptions.language || "asr").trim() || "asr";
+    const markdown = buildMarkdownDoc({
+      title,
+      sourceUrl: inputUrl,
+      fetchedAt,
+      contentMarkdown: asrResult.text,
+      extraFields: {
+        source_type: "bilibili-audio",
+        transcribed_at: new Date().toISOString(),
+        asr_backend: asrResult.backend,
+        asr_model: asrResult.model,
+        audio_stream_id: audioResult.audioId,
+      },
+    });
+    const filename = buildOutputFilename({ title, p, lang: "asr" });
+    const outputPath = await writeTextFile({ outDir, filename, text: markdown });
+    return { path: outputPath, bvid, cid, lang };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 }
