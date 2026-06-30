@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "bin": {
-    "dylan-bili-to-md": "./scripts/bili_to_txt.mjs"
+    "dylan-bili-to-md": "./scripts/bili_to_txt.mjs",
+    "dylan-bili-download-audio": "./scripts/bili_download_audio.mjs",
+    "dylan-bili-audio-to-md": "./scripts/audio_to_md.mjs"
   },
   "files": [
     "SKILL.md",

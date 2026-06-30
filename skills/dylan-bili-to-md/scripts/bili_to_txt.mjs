@@ -201,7 +201,9 @@ async function getSubtitles({ aid, bvid, cid, cookie }) {
     if (needLoginSubtitle && !cookie) {
       throw new Error("该视频字幕需要登录态，请通过 --cookie 或 config.json.cookie 提供 Cookie");
     }
-    throw new Error("未找到可用字幕（可能无字幕，或 Cookie 失效/权限不足）");
+    throw new Error(
+      "未找到可用字幕（可能无字幕，或 Cookie 失效/权限不足）。可先手动下载音频，再用 dylan-bili-audio-to-md 转写"
+    );
   }
 
   return { subtitles, needLoginSubtitle };

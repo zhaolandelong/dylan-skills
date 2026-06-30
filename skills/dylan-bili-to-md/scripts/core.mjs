@@ -126,6 +126,11 @@ export function buildOutputFilename({ title, p, lang }) {
   return `${base}${suffix}-${safeLang}.md`;
 }
 
+export function buildAudioOutputFilename({ title }) {
+  const base = filenameBaseFromTitle(title);
+  return `${base}-asr.md`;
+}
+
 export function buildArticleId(sourceUrl) {
   const u = String(sourceUrl || '').trim();
   if (!u) return 'bili-unknown';
@@ -133,25 +138,34 @@ export function buildArticleId(sourceUrl) {
   return `bili-${hash}`;
 }
 
-export function buildFrontmatter({ title, sourceUrl, fetchedAt }) {
+export function buildFrontmatter({ title, sourceUrl, fetchedAt, extraFields = {} }) {
   const t = String(title || '').replace(/\n/g, ' ').trim();
   const u = String(sourceUrl || '').trim();
   const f = String(fetchedAt || '').trim();
-  const a = buildArticleId(u);
+  const a = buildArticleId(u || t);
+  const entries = [
+    ['article_id', a],
+    ['title', t],
+  ];
 
-  return [
-    '---',
-    `article_id: ${JSON.stringify(a)}`,
-    `title: ${JSON.stringify(t)}`,
-    `source_url: ${JSON.stringify(u)}`,
-    `fetched_at: ${JSON.stringify(f)}`,
-    '---',
-    '',
-  ].join('\n');
+  if (u) entries.push(['source_url', u]);
+  if (f) entries.push(['fetched_at', f]);
+
+  for (const [key, value] of Object.entries(extraFields || {})) {
+    if (value === undefined || value === null || value === '') continue;
+    entries.push([key, value]);
+  }
+
+  return ['---', ...entries.map(([key, value]) => `${key}: ${JSON.stringify(value)}`), '---', ''].join(
+    '\n'
+  );
 }
 
-export function buildMarkdownDoc({ title, sourceUrl, fetchedAt, contentMarkdown }) {
-  return buildFrontmatter({ title, sourceUrl, fetchedAt }) + ensureTrailingNewline(String(contentMarkdown || ''));
+export function buildMarkdownDoc({ title, sourceUrl, fetchedAt, contentMarkdown, extraFields = {} }) {
+  return (
+    buildFrontmatter({ title, sourceUrl, fetchedAt, extraFields }) +
+    ensureTrailingNewline(String(contentMarkdown || ''))
+  );
 }
 
 export function extractWbiKeys(navData) {

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
+  buildAudioOutputFilename,
   buildArticleId,
   buildFrontmatter,
   buildMarkdownDoc,
@@ -13,7 +14,7 @@ import {
   pickOutDir,
   pickPreferredSubtitle,
   subtitleBodyToPlainText
-} from '../skills/dylan-bli-to-md/scripts/core.mjs';
+} from '../skills/dylan-bili-to-md/scripts/core.mjs';
 
 test('parseBilibiliVideoUrl parses BV and p', () => {
   const r = parseBilibiliVideoUrl(
@@ -58,6 +59,10 @@ test('buildOutputFilename adds p and lang', () => {
     buildOutputFilename({ title: 'Hello', p: 3, lang: 'zh-CN' }),
     'Hello-p3-zh-CN.md'
   );
+});
+
+test('buildAudioOutputFilename adds asr suffix', () => {
+  assert.equal(buildAudioOutputFilename({ title: 'Hello' }), 'Hello-asr.md');
 });
 
 test('pickPreferredSubtitle prefers cc then ai, and prefers zh-CN', () => {
@@ -112,7 +117,7 @@ test('encodeWbiParams appends wts and w_rid', () => {
 test('buildArticleId/buildFrontmatter/buildMarkdownDoc use yml frontmatter style', () => {
   const url = 'https://www.bilibili.com/video/BV1qh7b6xEAH/';
   const articleId = buildArticleId(url);
-  assert.match(articleId, /^bli-[0-9a-f]{12}$/);
+  assert.match(articleId, /^bili-[0-9a-f]{12}$/);
 
   const frontmatter = buildFrontmatter({
     title: '标题',
@@ -134,4 +139,33 @@ test('buildArticleId/buildFrontmatter/buildMarkdownDoc use yml frontmatter style
   });
   assert.match(doc, /^---\narticle_id:/);
   assert.match(doc, /\n---\n第一行\n第二行\n$/);
+});
+
+test('buildFrontmatter/buildMarkdownDoc support extra fields for audio transcription', () => {
+  const frontmatter = buildFrontmatter({
+    title: '音频标题',
+    extraFields: {
+      source_file: '/tmp/audio.m4s',
+      source_type: 'audio',
+      asr_model: 'whisper-1'
+    }
+  });
+  assert.match(frontmatter, /source_file: "\/tmp\/audio\.m4s"/);
+  assert.match(frontmatter, /source_type: "audio"/);
+  assert.match(frontmatter, /asr_model: "whisper-1"/);
+  assert.doesNotMatch(frontmatter, /source_url:/);
+
+  const doc = buildMarkdownDoc({
+    title: '音频标题',
+    contentMarkdown: '第一句',
+    extraFields: {
+      source_file: '/tmp/audio.m4s',
+      source_type: 'audio',
+      transcribed_at: '2026-06-30T00:00:00.000Z',
+      asr_backend: 'openai-compatible',
+      asr_model: 'whisper-1'
+    }
+  });
+  assert.match(doc, /transcribed_at: "2026-06-30T00:00:00\.000Z"/);
+  assert.match(doc, /\n---\n第一句\n$/);
 });
