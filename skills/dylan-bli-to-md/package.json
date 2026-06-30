@@ -1,0 +1,17 @@
+{
+  "name": "dylan-bli-to-md",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "dylan-bli-to-md": "./scripts/bili_to_txt.mjs"
+  },
+  "files": [
+    "SKILL.md",
+    "config.json",
+    "scripts/"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
