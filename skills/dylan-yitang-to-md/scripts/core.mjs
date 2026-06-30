@@ -405,6 +405,13 @@ export function buildEmbeddedDownloadCookieComment(cookieHeader) {
   return `<!-- dylan-download-md-img-cookie: ${Buffer.from(value).toString('base64url')} -->`;
 }
 
+export function stripGridLayoutTags(markdown) {
+  return String(markdown || '').replace(
+    /^\s*<\/?(?:grid|column)(?:\s+[^>]*)?>\s*$/gmi,
+    ''
+  );
+}
+
 export function buildMarkdownDoc({ title, sourceUrl, fetchedAt, contentMarkdown, embeddedDownloadCookie = '' }) {
   const frontmatter = buildFrontmatter({ title, sourceUrl, fetchedAt });
   const cookieComment = buildEmbeddedDownloadCookieComment(embeddedDownloadCookie);

@@ -2,7 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildFrontmatter, filenameBaseFromTitle } from './core.mjs';
+import { buildFrontmatter, filenameBaseFromTitle, stripGridLayoutTags } from './core.mjs';
 
 export function extractTitle(markdown) {
   const match = String(markdown || '').match(/^\s*<title>([\s\S]*?)<\/title>\s*/i);
@@ -77,13 +77,19 @@ export function buildAlignedFrontmatter({ title, sourceUrl, fetchedAt, inputPath
   ].join('\n');
 }
 
-export function transformMarkdown(markdown, { inputPath, sourceUrl = '', fetchedAt = '' } = {}) {
+export function transformMarkdown(
+  markdown,
+  { inputPath, sourceUrl = '', fetchedAt = '', stripImageAlt = false } = {}
+) {
   const title = extractTitle(markdown);
   if (!title) {
     throw new Error('未找到 <title> 标签，无法生成目标文件名');
   }
 
-  const body = stripImageAltText(rewriteMarkdownImageUrls(stripLeadingTitleTag(markdown))).trimStart();
+  const strippedTitle = stripLeadingTitleTag(markdown);
+  const rewritten = rewriteMarkdownImageUrls(strippedTitle);
+  const normalized = stripGridLayoutTags(rewritten);
+  const body = (stripImageAlt ? stripImageAltText(normalized) : normalized).trimStart();
   const frontmatter = buildAlignedFrontmatter({ title, sourceUrl, fetchedAt, inputPath });
   const output = `${frontmatter}${body}`.replace(/\s+$/u, '') + '\n';
   const filename = `${filenameBaseFromTitle(title)}.md`;
@@ -92,12 +98,13 @@ export function transformMarkdown(markdown, { inputPath, sourceUrl = '', fetched
 }
 
 async function main() {
-  const { inputPath, outputDir, sourceUrl, fetchedAt } = parseArgs(process.argv.slice(2));
+  const { inputPath, outputDir, sourceUrl, fetchedAt, stripImageAlt } = parseArgs(process.argv.slice(2));
   const input = await fs.readFile(inputPath, 'utf8');
   const transformed = transformMarkdown(input, {
     inputPath,
     sourceUrl,
-    fetchedAt
+    fetchedAt,
+    stripImageAlt
   });
 
   await fs.mkdir(outputDir, { recursive: true });
@@ -116,6 +123,7 @@ function parseArgs(argv) {
   let outputDir = path.dirname(path.resolve(inputPath));
   let sourceUrl = '';
   let fetchedAt = '';
+  let stripImageAlt = false;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -134,6 +142,10 @@ function parseArgs(argv) {
       i += 1;
       continue;
     }
+    if (arg === '--strip-image-alt') {
+      stripImageAlt = true;
+      continue;
+    }
     throw new Error(`不支持的参数: ${arg}`);
   }
 
@@ -141,7 +153,8 @@ function parseArgs(argv) {
     inputPath: path.resolve(inputPath),
     outputDir,
     sourceUrl,
-    fetchedAt
+    fetchedAt,
+    stripImageAlt
   };
 }
 

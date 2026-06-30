@@ -7,8 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { promisify } from 'node:util';
 import { chromium } from 'playwright-core';
-import { buildCookieHeaderFromList, buildMarkdownDoc, extractTitleTagContent, htmlToMarkdown, isFeishuDocxUrl, isProbablyYitangDocUrl, normalizeContentHtml, pickOutDir } from './core.mjs';
+import { buildCookieHeaderFromList, buildMarkdownDoc, extractTitleTagContent, htmlToMarkdown, isFeishuDocxUrl, isProbablyYitangDocUrl, normalizeContentHtml, pickOutDir, stripGridLayoutTags } from './core.mjs';
 import { fileExists, parseCookieString, pickChromiumExecutablePath, readJsonFile, resolveMarkdownOutputTarget, writeMarkdownFile } from './io.mjs';
+import { rewriteMarkdownImageUrls, stripImageAltText } from './yitang_postprocess_md.mjs';
 
 const DEFAULT_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
@@ -23,6 +24,7 @@ const { values, positionals } = parseArgs({
     cookie: { type: 'string' },
     'download-images': { type: 'boolean' },
     'no-download-images': { type: 'boolean' },
+    'strip-image-alt': { type: 'boolean' },
     headed: { type: 'boolean' },
     'embed-image-cookie': { type: 'boolean' },
     'no-embed-image-cookie': { type: 'boolean' },
@@ -73,6 +75,10 @@ const embedImageCookie = resolveEmbedImageCookie({
   cliOn: values['embed-image-cookie'],
   cliOff: values['no-embed-image-cookie'],
   configValue: config?.embedImageCookie
+});
+const stripImageAlt = resolveStripImageAlt({
+  cliOn: values['strip-image-alt'],
+  configValue: config?.stripImageAlt
 });
 
 const fetchedAt = new Date().toISOString();
@@ -143,6 +149,9 @@ async function main() {
       contentMd = htmlToMarkdown(contentHtml);
     }
 
+    contentMd = stripGridLayoutTags(contentMd);
+    contentMd = rewriteMarkdownImageUrls(contentMd);
+    if (stripImageAlt) contentMd = stripImageAltText(contentMd);
     console.error(`解析标题: ${title}`);
 
     const outDir = pickOutDir({
@@ -236,6 +245,12 @@ function resolveEmbedImageCookie({ cliOn, cliOff, configValue }) {
   if (cliOn === true) return true;
   if (typeof configValue === 'boolean') return configValue;
   return true;
+}
+
+function resolveStripImageAlt({ cliOn, configValue }) {
+  if (cliOn === true) return true;
+  if (typeof configValue === 'boolean') return configValue;
+  return false;
 }
 
 function resolveOnConflict({ cliValue, overwrite, rename, configValue }) {
