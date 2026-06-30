@@ -1,9 +1,9 @@
 ---
-name: dylan-bli-to-md
+name: dylan-bili-to-md
 description: 当用户提供 B 站视频链接并希望“下载/保存字幕”时使用。会把现成字幕保存为本地 Markdown，stdout 单行返回包含 path/bvid/cid/lang/source 的 JSON。
 ---
 
-# dylan-bli-to-md
+# dylan-bili-to-md
 
 ## 入参
 
@@ -20,5 +20,5 @@ description: 当用户提供 B 站视频链接并希望“下载/保存字幕”
 ## 调用
 
 ```bash
-node skills/dylan-bli-to-md/scripts/bili_to_txt.mjs "https://www.bilibili.com/video/BV..."
+node skills/dylan-bili-to-md/scripts/bili_to_txt.mjs "https://www.bilibili.com/video/BV..."
 ```

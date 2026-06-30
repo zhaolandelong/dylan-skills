@@ -161,7 +161,7 @@ function buildPlayerWbiApiUrl({ aid, cid, imgKey, subKey }) {
 }
 
 function log(message) {
-  process.stderr.write(`[bli-to-md] ${message}\n`);
+  process.stderr.write(`[bili-to-md] ${message}\n`);
 }
 
 function writeResult(outputPath, bvid, cid, lang, source) {

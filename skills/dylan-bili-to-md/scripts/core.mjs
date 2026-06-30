@@ -128,9 +128,9 @@ export function buildOutputFilename({ title, p, lang }) {
 
 export function buildArticleId(sourceUrl) {
   const u = String(sourceUrl || '').trim();
-  if (!u) return 'bli-unknown';
+  if (!u) return 'bili-unknown';
   const hash = crypto.createHash('sha1').update(u).digest('hex').slice(0, 12);
-  return `bli-${hash}`;
+  return `bili-${hash}`;
 }
 
 export function buildFrontmatter({ title, sourceUrl, fetchedAt }) {
