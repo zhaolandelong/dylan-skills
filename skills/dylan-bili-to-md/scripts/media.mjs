@@ -62,6 +62,32 @@ export async function convertMediaToM4a({ inputPath, outputPath }) {
   ], '转 m4a');
 }
 
+export async function concatM4aFiles({ inputPaths, outputPath }) {
+  const items = Array.isArray(inputPaths) ? inputPaths.filter(Boolean) : [];
+  if (!items.length) {
+    throw new Error('缺少需要拼接的音频文件');
+  }
+  if (items.length === 1) {
+    await fs.copyFile(items[0], outputPath);
+    return;
+  }
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dylan-bili-concat-'));
+  const listPath = path.join(tempDir, 'inputs.txt');
+  try {
+    const listContent = items
+      .map((p) => `file ${JSON.stringify(String(p))}`)
+      .join('\n');
+    await fs.writeFile(listPath, listContent + '\n', 'utf8');
+    await runFfmpeg(
+      ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', outputPath],
+      '拼接音频'
+    );
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function convertM4sToWav({ inputPath, outputPath }) {
   await runFfmpeg([
     '-y',

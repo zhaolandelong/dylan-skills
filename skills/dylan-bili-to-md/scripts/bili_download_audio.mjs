@@ -6,12 +6,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
   filenameBaseFromTitle,
+  isProbablyBilibiliCheeseUrl,
   isProbablyBilibiliVideoUrl,
+  parseBilibiliCheeseUrl,
   parseBilibiliVideoUrl,
   pickOutDir,
 } from './core.mjs';
 import { fetchBuffer, fetchJson, readJsonFile, resolveFinalUrl } from './io.mjs';
-import { convertMediaToM4a } from './media.mjs';
+import { concatM4aFiles, convertMediaToM4a } from './media.mjs';
 
 export function extractPlayinfoFromHtml(html) {
   const source = String(html || '');
@@ -52,8 +54,14 @@ export async function downloadBilibiliAudio({
   if (!inputUrl) {
     throw new Error('缺少 URL 参数');
   }
-  if (!isProbablyBilibiliVideoUrl(inputUrl)) {
-    throw new Error('URL 不是 B 站视频链接(bilibili.com/video/BV... 或 b23.tv/...)');
+  const isVideoUrl = isProbablyBilibiliVideoUrl(inputUrl);
+  const isCheeseUrl = isProbablyBilibiliCheeseUrl(inputUrl);
+  if (!isVideoUrl && !isCheeseUrl) {
+    throw new Error('URL 不是支持的 B 站链接（video 或 cheese）');
+  }
+
+  if (isCheeseUrl) {
+    return await downloadBilibiliCheeseAudio({ inputUrl, outDir, cookie, logger });
   }
 
   const headers = cookie ? { cookie } : {};
@@ -124,8 +132,8 @@ export async function main(argv = process.argv.slice(2)) {
   if (!inputUrl) {
     throw new Error('缺少 URL 参数');
   }
-  if (!isProbablyBilibiliVideoUrl(inputUrl)) {
-    throw new Error('URL 不是 B 站视频链接(bilibili.com/video/BV... 或 b23.tv/...)');
+  if (!isProbablyBilibiliVideoUrl(inputUrl) && !isProbablyBilibiliCheeseUrl(inputUrl)) {
+    throw new Error('URL 不是支持的 B 站链接（video 或 cheese）');
   }
 
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -158,6 +166,36 @@ function buildViewApiUrl({ bvid, aid }) {
   return `https://api.bilibili.com/x/web-interface/view?aid=${encodeURIComponent(String(aid))}`;
 }
 
+function buildPugvSeasonApiUrl({ epId, seasonId }) {
+  const u = new URL('https://api.bilibili.com/pugv/view/web/season');
+  if (seasonId) u.searchParams.set('season_id', String(seasonId));
+  else u.searchParams.set('ep_id', String(epId));
+  return u.toString();
+}
+
+function buildPugvPlayurlApiUrl({ aid, epId, cid, qn = 32 }) {
+  const u = new URL('https://api.bilibili.com/pugv/player/web/playurl');
+  u.searchParams.set('avid', String(aid));
+  u.searchParams.set('ep_id', String(epId));
+  u.searchParams.set('cid', String(cid));
+  u.searchParams.set('qn', String(qn));
+  return u.toString();
+}
+
+function buildPugvPlayurlApiUrlDash({ aid, epId, cid, qn = 32 }) {
+  const u = new URL('https://api.bilibili.com/pugv/player/web/playurl');
+  u.searchParams.set('avid', String(aid));
+  u.searchParams.set('ep_id', String(epId));
+  u.searchParams.set('cid', String(cid));
+  u.searchParams.set('qn', String(qn));
+  u.searchParams.set('fnver', '0');
+  u.searchParams.set('fnval', '16');
+  u.searchParams.set('fourk', '0');
+  u.searchParams.set('from_client', 'BROWSER');
+  u.searchParams.set('drm_tech_type', '2');
+  return u.toString();
+}
+
 async function fetchPageHtml(url, headers) {
   const { buffer } = await fetchBuffer(url, { headers });
   return buffer.toString('utf8');
@@ -172,6 +210,140 @@ function safeJson(value) {
     return JSON.stringify(value);
   } catch {
     return String(value);
+  }
+}
+
+async function downloadBilibiliCheeseAudio({ inputUrl, outDir, cookie, logger }) {
+  const trimmedCookie = String(cookie || '').trim();
+  if (!trimmedCookie) {
+    throw new Error('课程下载需要登录态，请通过 --cookie 或 config.json.cookie 提供 Cookie');
+  }
+
+  const { epId, seasonId } = parseBilibiliCheeseUrl(inputUrl);
+  if (!epId && !seasonId) {
+    throw new Error('未能从课程链接解析出 ep_id/season_id');
+  }
+
+  const headers = { cookie: trimmedCookie, referer: 'https://www.bilibili.com/' };
+
+  logger('获取课程信息...');
+  const season = await fetchJson(buildPugvSeasonApiUrl({ epId, seasonId }), { headers });
+  if (season?.code !== 0 || !season?.data) {
+    throw new Error(`获取课程信息失败: ${safeJson(season)}`);
+  }
+
+  const courseTitle = String(season.data?.title || '').trim() || 'bilibili-cheese';
+  const episodes = Array.isArray(season.data?.episodes) ? season.data.episodes : [];
+  if (!episodes.length) {
+    throw new Error('课程下未找到分集');
+  }
+
+  const episode =
+    (epId ? episodes.find((e) => Number(e?.id) === Number(epId)) : null) || episodes[0];
+  const resolvedEpId = Number(episode?.id);
+  const aid = Number(episode?.aid);
+  const cid = Number(episode?.cid);
+  if (!resolvedEpId || !aid || !cid) {
+    throw new Error('课程分集缺少必要字段（id/aid/cid）');
+  }
+
+  const index = String(episode?.index ?? '').trim();
+  const epTitle = String(episode?.title || '').trim() || `ep${resolvedEpId}`;
+  const title = `${courseTitle} - ${index ? `${index} - ` : ''}${epTitle}`.trim();
+
+  await fs.mkdir(outDir, { recursive: true });
+
+  logger('获取播放信息...');
+  const dashFirst = await fetchJson(buildPugvPlayurlApiUrlDash({ aid, epId: resolvedEpId, cid }), {
+    headers,
+  });
+  let playurl = dashFirst;
+  if (dashFirst?.code === -400 && String(dashFirst?.message || '').toLowerCase().includes('not dash')) {
+    playurl = await fetchJson(buildPugvPlayurlApiUrl({ aid, epId: resolvedEpId, cid }), { headers });
+  }
+  if (playurl?.code !== 0 || !playurl?.data) {
+    throw new Error(`获取播放信息失败: ${safeJson(playurl)}`);
+  }
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dylan-bili-cheese-audio-'));
+  try {
+    const dashAudio = pickPreferredDashAudio(playurl.data?.dash?.audio);
+    if (dashAudio) {
+      const audioUrl = String(dashAudio.baseUrl || dashAudio.base_url || '').trim();
+      if (!audioUrl) {
+        throw new Error('播放信息中未找到可用音频流 url');
+      }
+
+      const baseName = buildDownloadedAudioBasename({ title, p: 1, audioId: dashAudio.id });
+      const rawPath = path.join(tempDir, `${baseName}.m4s`);
+      const finalM4aPath = path.join(outDir, `${baseName}.m4a`);
+
+      logger(`下载音频流: ${dashAudio.id || 'unknown'}...`);
+      const { buffer } = await fetchBuffer(audioUrl, { headers });
+      await fs.writeFile(rawPath, buffer);
+
+      logger('转 m4a...');
+      await convertMediaToM4a({ inputPath: rawPath, outputPath: finalM4aPath });
+
+      return {
+        path: finalM4aPath,
+        rawPath,
+        bvid: `pugv-ep${resolvedEpId}`,
+        cid,
+        audioId: Number(dashAudio.id || 0) || null,
+        source: 'pugv-dash-audio',
+        title,
+        p: 1,
+        url: `https://www.bilibili.com/cheese/play/ep${resolvedEpId}`,
+        epId: resolvedEpId,
+        aid,
+      };
+    }
+
+    const durl = Array.isArray(playurl.data?.durl) ? playurl.data.durl : [];
+    if (!durl.length) {
+      throw new Error('播放信息中未找到可用视频流(durl/dash)');
+    }
+
+    const segmentM4as = [];
+    let order = 0;
+    for (const seg of durl) {
+      order += 1;
+      const segUrl = String(seg?.url || '').trim();
+      if (!segUrl) continue;
+      const rawPath = path.join(tempDir, `seg-${order}.mp4`);
+      const m4aPath = path.join(tempDir, `seg-${order}.m4a`);
+      logger(`下载视频分段: ${order}/${durl.length}...`);
+      const { buffer } = await fetchBuffer(segUrl, { headers });
+      await fs.writeFile(rawPath, buffer);
+      logger(`抽取音频: ${order}/${durl.length}...`);
+      await convertMediaToM4a({ inputPath: rawPath, outputPath: m4aPath });
+      segmentM4as.push(m4aPath);
+    }
+
+    if (!segmentM4as.length) {
+      throw new Error('未能下载任何分段');
+    }
+
+    const baseName = buildDownloadedAudioBasename({ title, p: 1, audioId: null });
+    const finalM4aPath = path.join(outDir, `${baseName}.m4a`);
+    await concatM4aFiles({ inputPaths: segmentM4as, outputPath: finalM4aPath });
+
+    return {
+      path: finalM4aPath,
+      rawPath: '',
+      bvid: `pugv-ep${resolvedEpId}`,
+      cid,
+      audioId: null,
+      source: 'pugv-durl',
+      title,
+      p: 1,
+      url: `https://www.bilibili.com/cheese/play/ep${resolvedEpId}`,
+      epId: resolvedEpId,
+      aid,
+    };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
   }
 }
 

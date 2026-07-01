@@ -9,8 +9,10 @@ import {
   buildOutputFilename,
   encodeWbiParams,
   extractWbiKeys,
+  isProbablyBilibiliCheeseUrl,
   isProbablyBilibiliCollectionUrl,
   isProbablyBilibiliVideoUrl,
+  parseBilibiliCheeseUrl,
   parseBilibiliCollectionUrl,
   parseBilibiliVideoUrl,
   pickOutDir,
@@ -46,8 +48,11 @@ export async function main(argv = process.argv.slice(2)) {
 
   const isVideoUrl = isProbablyBilibiliVideoUrl(inputUrl);
   const isCollectionUrl = isProbablyBilibiliCollectionUrl(inputUrl);
-  if (!isVideoUrl && !isCollectionUrl) {
-    throw new Error("URL 不是支持的 B 站链接（支持 bilibili.com/video/BV...、b23.tv/...、space.bilibili.com/.../lists/...）");
+  const isCheeseUrl = isProbablyBilibiliCheeseUrl(inputUrl);
+  if (!isVideoUrl && !isCollectionUrl && !isCheeseUrl) {
+    throw new Error(
+      "URL 不是支持的 B 站链接（支持 bilibili.com/video/BV...、b23.tv/...、space.bilibili.com/.../lists/...、bilibili.com/cheese/play/ep... 或 /ss...）"
+    );
   }
 
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -86,6 +91,28 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(
       `${JSON.stringify({
         mode: "collection",
+        count: results.items.length,
+        failedCount: results.failed.length,
+        items: results.items,
+        failed: results.failed,
+      })}\n`
+    );
+    return;
+  }
+
+  if (isCheeseUrl) {
+    const results = await processBilibiliCheeseUrl({
+      inputUrl,
+      cookie,
+      outDir,
+      fetchedAt,
+      asrOptions,
+      preferAsr: values["prefer-asr"],
+    });
+    process.stdout.write(
+      `${JSON.stringify({
+        mode: "collection",
+        collectionType: "cheese",
         count: results.items.length,
         failedCount: results.failed.length,
         items: results.items,
@@ -137,6 +164,13 @@ function buildViewApiUrl({ bvid, aid }) {
 
 function buildNavApiUrl() {
   return "https://api.bilibili.com/x/web-interface/nav";
+}
+
+function buildPugvSeasonApiUrl({ epId, seasonId }) {
+  const u = new URL("https://api.bilibili.com/pugv/view/web/season");
+  if (seasonId) u.searchParams.set("season_id", String(seasonId));
+  else u.searchParams.set("ep_id", String(epId));
+  return u.toString();
 }
 
 export function buildSeasonArchivesApiUrl({ mid, seasonId, pageNum, pageSize }) {
@@ -324,6 +358,95 @@ export async function processBilibiliCollectionUrl({
   return { items: results, failed };
 }
 
+export async function processBilibiliCheeseUrl({
+  inputUrl,
+  cookie,
+  outDir,
+  fetchedAt,
+  asrOptions,
+  preferAsr = false,
+}) {
+  if (!cookie) {
+    throw new Error("课程下载需要登录态，请通过 --cookie 或 config.json.cookie 提供 Cookie");
+  }
+  if (!String(asrOptions?.baseUrl || "").trim()) {
+    throw new Error("课程默认无字幕，需要配置 ASR：请通过 --base-url/--api-key/--model 或 config.json.asr 提供转写服务");
+  }
+
+  const normalizedUrl = inputUrl;
+  const { epId, seasonId } = parseBilibiliCheeseUrl(normalizedUrl);
+  if (!epId && !seasonId) {
+    throw new Error("未能从课程链接解析出 ep_id/season_id");
+  }
+
+  log("获取课程信息...");
+  const season = await fetchJson(buildPugvSeasonApiUrl({ epId, seasonId }), {
+    headers: { cookie },
+  });
+  if (season?.code !== 0 || !season?.data) {
+    throw new Error(`获取课程信息失败: ${safeJson(season)}`);
+  }
+
+  const courseTitle = String(season.data?.title || "").trim() || "bilibili-cheese";
+  const courseSeasonId = Number(season.data?.season_id || seasonId) || null;
+  const allEpisodes = Array.isArray(season.data?.episodes) ? season.data.episodes : [];
+  const episodes = epId ? allEpisodes.filter((e) => Number(e?.id) === Number(epId)) : allEpisodes;
+  if (!episodes.length) {
+    throw new Error("课程下未找到分集");
+  }
+
+  const results = [];
+  const failed = [];
+  for (const episode of episodes) {
+    const epNum = Number(episode?.id);
+    const aid = Number(episode?.aid);
+    const cid = Number(episode?.cid);
+    const epIndex = episode?.index ?? null;
+    const epTitle = String(episode?.title || "").trim();
+    const episodeUrl = epNum ? `https://www.bilibili.com/cheese/play/ep${epNum}` : normalizedUrl;
+    const label = epTitle ? `${epIndex ? `${epIndex} ` : ""}${epTitle}` : `${epIndex || ""}`.trim();
+    log(`处理课程分集: ${epNum || "?"} ${label ? `(${label})` : ""}`);
+
+    if (!epNum || !aid || !cid) {
+      failed.push({
+        epId: epNum || null,
+        aid: aid || null,
+        cid: cid || null,
+        title: epTitle,
+        videoUrl: episodeUrl,
+        error: "分集缺少 id/aid/cid",
+      });
+      continue;
+    }
+
+    try {
+      const result = await processBilibiliCheeseEpisode({
+        courseTitle,
+        courseSeasonId,
+        episode,
+        cookie,
+        outDir,
+        fetchedAt,
+        asrOptions,
+        preferAsr,
+      });
+      results.push(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`跳过失败分集: ep${epNum} ${message}`);
+      failed.push({
+        epId: epNum,
+        aid,
+        cid,
+        title: epTitle,
+        videoUrl: episodeUrl,
+        error: message,
+      });
+    }
+  }
+  return { items: results, failed };
+}
+
 async function fetchBilibiliCollectionArchives({ mid, seasonId, cookie }) {
   const headers = cookie ? { cookie } : {};
   const items = [];
@@ -384,6 +507,54 @@ async function getSubtitles({ aid, bvid, cid, cookie }) {
   return { subtitles, needLoginSubtitle, reason: "" };
 }
 
+async function processBilibiliCheeseEpisode({
+  courseTitle,
+  courseSeasonId,
+  episode,
+  cookie,
+  outDir,
+  fetchedAt,
+  asrOptions,
+}) {
+  const epId = Number(episode?.id);
+  const aid = Number(episode?.aid);
+  const cid = Number(episode?.cid);
+  const index = String(episode?.index ?? "").trim();
+  const epTitle = String(episode?.title || "").trim() || `ep${epId}`;
+  const title = `${courseTitle} - ${index ? `${index} - ` : ""}${epTitle}`.trim();
+  const sourceUrl = `https://www.bilibili.com/cheese/play/ep${epId}`;
+
+  const output = await transcribeFromAudioFallback({
+    inputUrl: sourceUrl,
+    title,
+    bvid: `pugv-ep${epId}`,
+    cid,
+    p: 1,
+    cookie,
+    outDir,
+    fetchedAt,
+    asrOptions,
+    extraFields: {
+      course_season_id: courseSeasonId,
+      course_title: courseTitle,
+      course_ep_id: epId,
+      aid,
+      cid,
+    },
+  });
+  const outputPath = output.path;
+  return {
+    path: outputPath,
+    epId,
+    aid,
+    cid,
+    lang: output.lang,
+    source: "asr",
+    title,
+    videoUrl: sourceUrl,
+  };
+}
+
 async function tryFetchWbiSubtitles({ aid, cid, cookie }) {
   try {
     log("获取 WBI 字幕列表...");
@@ -433,6 +604,7 @@ async function transcribeFromAudioFallback({
   outDir,
   fetchedAt,
   asrOptions,
+  extraFields = {},
 }) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dylan-bili-asr-"));
   try {
@@ -459,6 +631,7 @@ async function transcribeFromAudioFallback({
       fetchedAt,
       contentMarkdown: asrResult.text,
       extraFields: {
+        ...extraFields,
         source_type: "bilibili-audio",
         transcribed_at: new Date().toISOString(),
         asr_backend: asrResult.backend,

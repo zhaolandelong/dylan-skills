@@ -20,6 +20,16 @@ export function isProbablyBilibiliVideoUrl(input) {
   }
 }
 
+export function isProbablyBilibiliCheeseUrl(input) {
+  try {
+    const u = new URL(input);
+    if (u.hostname !== 'www.bilibili.com' && u.hostname !== 'bilibili.com') return false;
+    return /^\/cheese\/play\/(ep|ss)\d+\/?$/.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
 export function isProbablyBilibiliCollectionUrl(input) {
   try {
     const u = new URL(input);
@@ -44,6 +54,17 @@ export function parseBilibiliVideoUrl(input) {
   if (/^BV[0-9A-Za-z]+$/.test(id)) return { bvid: id, aid: null, p };
   if (/^av\d+$/i.test(id)) return { bvid: null, aid: Number(id.slice(2)), p };
   return { bvid: null, aid: null, p };
+}
+
+export function parseBilibiliCheeseUrl(input) {
+  const u = new URL(input);
+  const m = u.pathname.match(/^\/cheese\/play\/(ep|ss)(\d+)\/?$/);
+  if (!m) return { epId: null, seasonId: null };
+  const kind = m[1];
+  const id = Number(m[2]);
+  if (!Number.isFinite(id) || id <= 0) return { epId: null, seasonId: null };
+  if (kind === 'ep') return { epId: id, seasonId: null };
+  return { epId: null, seasonId: id };
 }
 
 export function parseBilibiliCollectionUrl(input) {

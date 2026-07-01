@@ -6,6 +6,8 @@ import {
 } from '../skills/dylan-bili-to-md/scripts/bili_to_txt.mjs';
 import {
   isProbablyBilibiliCollectionUrl,
+  isProbablyBilibiliCheeseUrl,
+  parseBilibiliCheeseUrl,
   parseBilibiliCollectionUrl,
 } from '../skills/dylan-bili-to-md/scripts/core.mjs';
 
@@ -66,6 +68,23 @@ test('parseBilibiliCollectionUrl extracts mid and season id', () => {
     parseBilibiliCollectionUrl('https://space.bilibili.com/504934876/lists/7638935'),
     { mid: 504934876, seasonId: 7638935 }
   );
+});
+
+test('isProbablyBilibiliCheeseUrl detects cheese ep/ss urls', () => {
+  assert.equal(isProbablyBilibiliCheeseUrl('https://www.bilibili.com/cheese/play/ep6902'), true);
+  assert.equal(isProbablyBilibiliCheeseUrl('https://www.bilibili.com/cheese/play/ss61'), true);
+  assert.equal(isProbablyBilibiliCheeseUrl('https://www.bilibili.com/video/BV1qh7b6xEAH'), false);
+});
+
+test('parseBilibiliCheeseUrl extracts epId or seasonId', () => {
+  assert.deepEqual(parseBilibiliCheeseUrl('https://www.bilibili.com/cheese/play/ep6902'), {
+    epId: 6902,
+    seasonId: null,
+  });
+  assert.deepEqual(parseBilibiliCheeseUrl('https://www.bilibili.com/cheese/play/ss61'), {
+    epId: null,
+    seasonId: 61,
+  });
 });
 
 test('buildSeasonArchivesApiUrl builds expected query', () => {
