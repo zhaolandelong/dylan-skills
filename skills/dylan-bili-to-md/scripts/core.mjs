@@ -20,6 +20,15 @@ export function isProbablyBilibiliVideoUrl(input) {
   }
 }
 
+export function isProbablyBilibiliCollectionUrl(input) {
+  try {
+    const u = new URL(input);
+    return u.hostname === 'space.bilibili.com' && /\/\d+\/lists\/\d+/.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
 export function parseBilibiliVideoUrl(input) {
   const u = new URL(input);
   const p = normalizeP(u.searchParams.get('p'));
@@ -35,6 +44,18 @@ export function parseBilibiliVideoUrl(input) {
   if (/^BV[0-9A-Za-z]+$/.test(id)) return { bvid: id, aid: null, p };
   if (/^av\d+$/i.test(id)) return { bvid: null, aid: Number(id.slice(2)), p };
   return { bvid: null, aid: null, p };
+}
+
+export function parseBilibiliCollectionUrl(input) {
+  const u = new URL(input);
+  const match = u.pathname.match(/^\/(\d+)\/lists\/(\d+)\/?$/);
+  if (!match) {
+    return { mid: null, seasonId: null };
+  }
+  return {
+    mid: Number(match[1]),
+    seasonId: Number(match[2]),
+  };
 }
 
 export function pickPreferredSubtitle(subtitles) {
@@ -220,6 +241,8 @@ function normalizeP(p) {
 }
 
 function classifySubtitleSource(s) {
+  const lang = String(s?.lan || '').trim().toLowerCase();
+  if (lang.startsWith('ai-')) return 'ai';
   const t = Number(s?.subtitle_type ?? s?.type);
   if (t === 1) return 'cc';
   if (t === 2) return 'ai';

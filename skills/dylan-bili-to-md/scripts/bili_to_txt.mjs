@@ -9,7 +9,9 @@ import {
   buildOutputFilename,
   encodeWbiParams,
   extractWbiKeys,
+  isProbablyBilibiliCollectionUrl,
   isProbablyBilibiliVideoUrl,
+  parseBilibiliCollectionUrl,
   parseBilibiliVideoUrl,
   pickOutDir,
   pickPreferredSubtitle,
@@ -42,8 +44,10 @@ export async function main(argv = process.argv.slice(2)) {
     throw new Error("缺少 URL 参数");
   }
 
-  if (!isProbablyBilibiliVideoUrl(inputUrl)) {
-    throw new Error("URL 不是 B 站视频链接(bilibili.com/video/BV... 或 b23.tv/...)");
+  const isVideoUrl = isProbablyBilibiliVideoUrl(inputUrl);
+  const isCollectionUrl = isProbablyBilibiliCollectionUrl(inputUrl);
+  if (!isVideoUrl && !isCollectionUrl) {
+    throw new Error("URL 不是支持的 B 站链接（支持 bilibili.com/video/BV...、b23.tv/...、space.bilibili.com/.../lists/...）");
   }
 
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -70,85 +74,36 @@ export async function main(argv = process.argv.slice(2)) {
   const fetchedAt = new Date().toISOString();
   const asrOptions = resolveAsrOptions({ cliValues: values, configAsr: config?.asr });
 
-  const normalizedUrl = await normalizeUrl(inputUrl, cookie);
-  const { bvid, aid, p } = parseBilibiliVideoUrl(normalizedUrl);
-
-  if (!bvid && !aid) {
-    throw new Error("未能从 URL 解析出 BV 号/av 号");
-  }
-
-  log("获取视频信息...");
-  const view = await fetchJson(buildViewApiUrl({ bvid, aid }), {
-    headers: cookie ? { cookie } : {},
-  });
-
-  if (view?.code !== 0 || !view?.data) {
-    throw new Error(`获取视频信息失败: ${safeJson(view)}`);
-  }
-
-  const title = String(view.data.title || "").trim() || "bilibili-video";
-  const pages = Array.isArray(view.data.pages) ? view.data.pages : [];
-  const page = pages.find((x) => Number(x?.page) === p) || pages[0];
-  if (!page?.cid) {
-    throw new Error("未找到 cid（可能是链接无效或视频结构异常）");
-  }
-
-  const cid = Number(page.cid);
-
-  const subtitleState = await getSubtitles({
-    aid: Number(view.data.aid || aid),
-    bvid,
-    cid,
-    cookie,
-  });
-
-  const picked = pickPreferredSubtitle(subtitleState.subtitles);
-  const contentMode = pickBiliContentMode({
-    pickedSubtitle: picked,
-    asrBaseUrl: asrOptions.baseUrl,
-    preferAsr: values["prefer-asr"],
-  });
-  if (contentMode === "subtitle") {
-    log(`下载字幕: ${picked.lang} (${picked.source})...`);
-    const subtitleJson = await fetchJson(picked.url, {
-      headers: cookie ? { cookie } : {},
-    });
-
-    const text = subtitleBodyToPlainText(subtitleJson?.body);
-    if (!text.trim()) {
-      throw new Error("字幕内容为空");
-    }
-
-    const markdown = buildMarkdownDoc({
-      title,
-      sourceUrl: normalizedUrl,
-      fetchedAt,
-      contentMarkdown: text,
-    });
-    const filename = buildOutputFilename({ title, p, lang: picked.lang });
-    const outputPath = await writeTextFile({ outDir, filename, text: markdown });
-
-    writeResult(outputPath, bvid || String(aid), cid, picked.lang, picked.source);
-    return;
-  }
-
-  if (contentMode === "asr") {
-    const output = await transcribeFromAudioFallback({
-      inputUrl: normalizedUrl,
-      title,
-      bvid: bvid || String(aid),
-      cid,
-      p,
+  if (isCollectionUrl) {
+    const results = await processBilibiliCollectionUrl({
+      inputUrl,
       cookie,
       outDir,
       fetchedAt,
       asrOptions,
+      preferAsr: values["prefer-asr"],
     });
-    writeResult(output.path, bvid || String(aid), cid, output.lang, "asr");
+    process.stdout.write(
+      `${JSON.stringify({
+        mode: "collection",
+        count: results.items.length,
+        failedCount: results.failed.length,
+        items: results.items,
+        failed: results.failed,
+      })}\n`
+    );
     return;
   }
 
-  throw new Error(subtitleState.reason);
+  const result = await processBilibiliVideoUrl({
+    inputUrl,
+    cookie,
+    outDir,
+    fetchedAt,
+    asrOptions,
+    preferAsr: values["prefer-asr"],
+  });
+  writeResult(result.path, result.bvid, result.cid, result.lang, result.source);
 }
 
 function isMainModule() {
@@ -171,6 +126,10 @@ async function normalizeUrl(url, cookie) {
   return finalUrl;
 }
 
+async function normalizeCollectionUrl(url) {
+  return url;
+}
+
 function buildViewApiUrl({ bvid, aid }) {
   if (bvid) return `https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`;
   return `https://api.bilibili.com/x/web-interface/view?aid=${encodeURIComponent(String(aid))}`;
@@ -178,6 +137,17 @@ function buildViewApiUrl({ bvid, aid }) {
 
 function buildNavApiUrl() {
   return "https://api.bilibili.com/x/web-interface/nav";
+}
+
+export function buildSeasonArchivesApiUrl({ mid, seasonId, pageNum, pageSize }) {
+  const u = new URL("https://api.bilibili.com/x/polymer/web-space/seasons_archives_list");
+  u.searchParams.set("mid", String(mid));
+  u.searchParams.set("season_id", String(seasonId));
+  u.searchParams.set("sort_reverse", "false");
+  u.searchParams.set("page_size", String(pageSize));
+  u.searchParams.set("page_num", String(pageNum));
+  u.searchParams.set("web_location", "333.1387");
+  return u.toString();
 }
 
 function buildPlayerApiUrl({ bvid, aid, cid }) {
@@ -220,6 +190,160 @@ function safeJson(v) {
   } catch {
     return String(v);
   }
+}
+
+export async function processBilibiliVideoUrl({
+  inputUrl,
+  cookie,
+  outDir,
+  fetchedAt,
+  asrOptions,
+  preferAsr = false,
+}) {
+  const normalizedUrl = await normalizeUrl(inputUrl, cookie);
+  const { bvid, aid, p } = parseBilibiliVideoUrl(normalizedUrl);
+
+  if (!bvid && !aid) {
+    throw new Error("未能从 URL 解析出 BV 号/av 号");
+  }
+
+  log("获取视频信息...");
+  const view = await fetchJson(buildViewApiUrl({ bvid, aid }), {
+    headers: cookie ? { cookie } : {},
+  });
+
+  if (view?.code !== 0 || !view?.data) {
+    throw new Error(`获取视频信息失败: ${safeJson(view)}`);
+  }
+
+  const title = String(view.data.title || "").trim() || "bilibili-video";
+  const pages = Array.isArray(view.data.pages) ? view.data.pages : [];
+  const page = pages.find((x) => Number(x?.page) === p) || pages[0];
+  if (!page?.cid) {
+    throw new Error("未找到 cid（可能是链接无效或视频结构异常）");
+  }
+
+  const cid = Number(page.cid);
+  const subtitleState = await getSubtitles({
+    aid: Number(view.data.aid || aid),
+    bvid,
+    cid,
+    cookie,
+  });
+
+  const picked = pickPreferredSubtitle(subtitleState.subtitles);
+  const contentMode = pickBiliContentMode({
+    pickedSubtitle: picked,
+    asrBaseUrl: asrOptions.baseUrl,
+    preferAsr,
+  });
+
+  if (contentMode === "subtitle") {
+    log(`下载字幕: ${picked.lang} (${picked.source})...`);
+    const subtitleJson = await fetchJson(picked.url, {
+      headers: cookie ? { cookie } : {},
+    });
+
+    const text = subtitleBodyToPlainText(subtitleJson?.body);
+    if (!text.trim()) {
+      throw new Error("字幕内容为空");
+    }
+
+    const markdown = buildMarkdownDoc({
+      title,
+      sourceUrl: normalizedUrl,
+      fetchedAt,
+      contentMarkdown: text,
+    });
+    const filename = buildOutputFilename({ title, p, lang: picked.lang });
+    const outputPath = await writeTextFile({ outDir, filename, text: markdown });
+    return { path: outputPath, bvid: bvid || String(aid), cid, lang: picked.lang, source: picked.source };
+  }
+
+  if (contentMode === "asr") {
+    const output = await transcribeFromAudioFallback({
+      inputUrl: normalizedUrl,
+      title,
+      bvid: bvid || String(aid),
+      cid,
+      p,
+      cookie,
+      outDir,
+      fetchedAt,
+      asrOptions,
+    });
+    return { ...output, bvid: bvid || String(aid), cid, source: "asr" };
+  }
+
+  throw new Error(subtitleState.reason);
+}
+
+export async function processBilibiliCollectionUrl({
+  inputUrl,
+  cookie,
+  outDir,
+  fetchedAt,
+  asrOptions,
+  preferAsr = false,
+}) {
+  const normalizedUrl = await normalizeCollectionUrl(inputUrl);
+  const { mid, seasonId } = parseBilibiliCollectionUrl(normalizedUrl);
+  if (!mid || !seasonId) {
+    throw new Error("未能从合集链接解析出 mid/season_id");
+  }
+
+  const archives = await fetchBilibiliCollectionArchives({ mid, seasonId, cookie });
+  if (!archives.length) {
+    throw new Error("合集下未找到视频");
+  }
+
+  const results = [];
+  const failed = [];
+  for (const archive of archives) {
+    const bvid = String(archive?.bvid || "").trim();
+    if (!bvid) continue;
+    const videoUrl = `https://www.bilibili.com/video/${bvid}`;
+    const title = String(archive?.title || "").trim();
+    log(`处理合集视频: ${bvid} ${title ? `(${title})` : ""}`);
+    try {
+      const result = await processBilibiliVideoUrl({
+        inputUrl: videoUrl,
+        cookie,
+        outDir,
+        fetchedAt,
+        asrOptions,
+        preferAsr,
+      });
+      results.push({ ...result, videoUrl, title });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`跳过失败视频: ${bvid} ${message}`);
+      failed.push({ bvid, title, videoUrl, error: message });
+    }
+  }
+  return { items: results, failed };
+}
+
+async function fetchBilibiliCollectionArchives({ mid, seasonId, cookie }) {
+  const headers = cookie ? { cookie } : {};
+  const items = [];
+  let pageNum = 1;
+  let total = Infinity;
+  const pageSize = 30;
+
+  while ((pageNum - 1) * pageSize < total) {
+    const url = buildSeasonArchivesApiUrl({ mid, seasonId, pageNum, pageSize });
+    const result = await fetchJson(url, { headers });
+    if (result?.code !== 0 || !result?.data) {
+      throw new Error(`获取合集列表失败: ${safeJson(result)}`);
+    }
+    const pageItems = Array.isArray(result.data.archives) ? result.data.archives : [];
+    items.push(...pageItems);
+    total = Number(result.data?.page?.total || pageItems.length || 0);
+    if (!pageItems.length) break;
+    pageNum += 1;
+  }
+  return items;
 }
 
 async function getSubtitles({ aid, bvid, cid, cookie }) {

@@ -7,22 +7,30 @@ description: 当用户提供 B 站视频链接并希望“下载/保存字幕”
 
 ## 能力
 
-### 1. 视频 URL -> 现成字幕 Markdown
+### 1. 视频 / 合集 URL -> 字幕优先，失败自动回退音频 ASR
 
-- `url`（必填）：B 站视频 URL（支持 `bilibili.com/video/BV...` 与 `b23.tv/...`）
+- `url`（必填）：B 站视频或合集 URL
+- 支持：`bilibili.com/video/BV...`、`b23.tv/...`、`space.bilibili.com/<mid>/lists/<season_id>`
 - `--out <dir>`（可选）：输出目录。未传时使用 `config.json.outDir`
 - `--cookie "<cookie>"`（可选）：需要登录态才能获取字幕时使用；也可写入 `config.json.cookie`
+- `--base-url <url>` / `--model <name>` / `--api-key <key>` / `--lang <code>`（可选）：当视频无字幕时自动回退到音频下载 + ASR
+- `--prefer-asr`（可选）：忽略现成字幕，直接走音频下载 + ASR；便于测试完整链路
 
 输出：
 
-- 写入一个 `.md` 到输出目录
+- 单视频：写入一个 `.md` 到输出目录
+- 合集：逐个视频写入 `.md`，stdout 返回 `items` 数组
 - 文件开头包含 frontmatter：`article_id` / `title` / `source_url` / `fetched_at`
-- stdout：单行 JSON：`{"path":"...","bvid":"...","cid":123,"lang":"...","source":"cc|ai"}`
+- stdout：单行 JSON：`{"path":"...","bvid":"...","cid":123,"lang":"...","source":"cc|ai|asr"}` 或 `{"mode":"collection","count":8,"items":[...]}`
 
 调用：
 
 ```bash
 node skills/dylan-bili-to-md/scripts/bili_to_txt.mjs "https://www.bilibili.com/video/BV..."
+```
+
+```bash
+node skills/dylan-bili-to-md/scripts/bili_to_txt.mjs "https://space.bilibili.com/504934876/lists/7638935"
 ```
 
 ### 2. 视频 URL -> 下载音频并转 m4a
@@ -68,9 +76,10 @@ node skills/dylan-bili-to-md/scripts/audio_to_md.mjs "/path/to/audio.m4s"
 
 ## 推荐工作流
 
-1. 若视频已有字幕，直接用 URL 模式。
-2. 若视频没有字幕，先执行 `dylan-bili-download-audio` 自动下载音频并转出 `.m4a`。
-3. 再执行 `dylan-bili-audio-to-md /path/to/audio.m4a` 或直接喂 `.m4s`。
+1. 直接执行 `dylan-bili-to-md <url>`。
+2. 若是单视频，脚本直接处理该视频；若是合集，脚本会逐个处理合集下所有视频。
+3. 有字幕时优先落现成字幕；无字幕且已配置 ASR 时自动下载音频并转写。
+4. 需要单独排查音频或手动转写时，再使用 `dylan-bili-download-audio` / `dylan-bili-audio-to-md`。
 
 ## 前置依赖
 

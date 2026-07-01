@@ -78,6 +78,14 @@ test('pickPreferredSubtitle prefers cc then ai, and prefers zh-CN', () => {
   assert.equal(picked.url, 'https://example.com/cc-zh.json');
 });
 
+test('pickPreferredSubtitle treats ai-* lan as ai source', () => {
+  const picked = pickPreferredSubtitle([
+    { lan: 'ai-zh', subtitle_type: 1, url: '//example.com/ai-zh.json' }
+  ]);
+  assert.ok(picked);
+  assert.equal(picked.source, 'ai');
+});
+
 test('subtitleBodyToPlainText joins lines and dedup adjacent', () => {
   const text = subtitleBodyToPlainText([
     { content: '第一句' },
