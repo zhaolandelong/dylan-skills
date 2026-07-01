@@ -1,0 +1,11 @@
+{
+  "outDir": "./test-docs",
+  "cookie": "",
+  "asr": {
+    "baseUrl": "http://100.110.240.36:8103",
+    "apiKey": "",
+    "model": "qwen3-asr",
+    "language": "zh",
+    "timeoutMs": 300000
+  }
+}

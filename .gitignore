@@ -21,6 +21,7 @@ coverage/
 
 test-docs/
 skills/dylan-yitang-to-md/storageState.json
+skills/**/config.json
 
 .trae/
 .codegraph/
